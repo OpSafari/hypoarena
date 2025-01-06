@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: py${{ matrix.python-version }} make ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+        target: [build, test-all, format-check, lint, typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Prepare venv
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+      - name: Install dev and torch extras (CPU wheels only)
+        run: >-
+          .venv/bin/python -m pip install -e ".[dev,torch]"
+          --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Run make ${{ matrix.target }}
+        run: make ${{ matrix.target }}
+
+  package-smoke:
+    name: wheel install smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Prepare venv
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[dev]"
+      - name: Build distributions and smoke-test the wheel
+        run: make release

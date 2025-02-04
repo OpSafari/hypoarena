@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  assets:
+    name: build and attach release assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Prepare venv
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[dev]"
+      - name: Build sdist and wheel, smoke-test the wheel
+        run: make release
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypoarena-dist
+          path: dist/*
+          if-no-files-found: error
+      - name: Attach assets to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "hypoarena ${version}" \
+              --notes "Offline hypothesis-discovery workbench. See CHANGELOG.md for the ${version} changes."
+          fi

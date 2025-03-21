@@ -5,10 +5,15 @@ from __future__ import annotations
 import pytest
 
 from hypoarena.errors import (
+    AdapterError,
+    CorpusError,
     DuplicateIdError,
     GraphInvariantError,
     HypoArenaError,
+    ReplayExhaustedError,
     SchemaError,
+    SpanNotFoundError,
+    TransportError,
     UnknownReferenceError,
     ValidationError,
 )
@@ -64,3 +69,27 @@ def test_unknown_reference_error_records_the_optional_owner() -> None:
 def test_graph_invariant_error_is_a_validation_error() -> None:
     assert issubclass(GraphInvariantError, ValidationError)
     assert GraphInvariantError("self loop", node="clm_01").exit_code == 2
+
+
+def test_corpus_errors_use_their_own_exit_code() -> None:
+    assert SpanNotFoundError("missing span", span="s1").exit_code == 3
+    assert issubclass(SpanNotFoundError, CorpusError)
+
+
+def test_replay_exhausted_is_an_adapter_error() -> None:
+    error = ReplayExhaustedError("no recorded response", agent="scripted")
+    assert isinstance(error, AdapterError)
+    assert error.exit_code == 4
+
+
+def test_transport_error_keeps_status_and_attempt_count() -> None:
+    error = TransportError("upstream unavailable", status=503, attempts=3)
+    assert error.status == 503
+    assert error.attempts == 3
+    assert "status=503" in str(error)
+
+
+def test_transport_error_defaults_are_inert() -> None:
+    error = TransportError("connection reset")
+    assert error.status is None
+    assert error.attempts == 0

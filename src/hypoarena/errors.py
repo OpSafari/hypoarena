@@ -39,3 +39,35 @@ class SchemaError(ValidationError):
     """A serialized payload did not match the expected schema."""
 
     code = "schema_error"
+
+
+class DuplicateIdError(ValidationError):
+    """An identifier was reused for a second node or record."""
+
+    code = "duplicate_id"
+
+    def __init__(self, identifier: str, kind: str) -> None:
+        super().__init__(f"duplicate {kind} id", identifier=identifier, kind=kind)
+        self.identifier = identifier
+        self.kind = kind
+
+
+class UnknownReferenceError(ValidationError):
+    """An edge or citation pointed at an identifier that does not exist."""
+
+    code = "unknown_reference"
+
+    def __init__(self, identifier: str, kind: str, *, owner: str | None = None) -> None:
+        details: dict[str, object] = {"identifier": identifier, "kind": kind}
+        if owner is not None:
+            details["owner"] = owner
+        super().__init__(f"unknown {kind} reference", **details)
+        self.identifier = identifier
+        self.kind = kind
+        self.owner = owner
+
+
+class GraphInvariantError(ValidationError):
+    """A graph operation would have broken a structural invariant."""
+
+    code = "graph_invariant"

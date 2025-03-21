@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from hypoarena.errors import HypoArenaError, SchemaError, ValidationError
+from hypoarena.errors import (
+    DuplicateIdError,
+    GraphInvariantError,
+    HypoArenaError,
+    SchemaError,
+    UnknownReferenceError,
+    ValidationError,
+)
 
 
 def test_base_error_keeps_message_and_details() -> None:
@@ -35,3 +42,25 @@ def test_categories_have_distinct_exit_codes() -> None:
 def test_errors_can_be_raised_and_caught_by_base_class() -> None:
     with pytest.raises(HypoArenaError):
         raise SchemaError("unknown key", key="surprise")
+
+
+def test_duplicate_id_error_exposes_identifier_and_kind() -> None:
+    error = DuplicateIdError("clm_01", "claim")
+    assert error.identifier == "clm_01"
+    assert error.kind == "claim"
+    assert error.code == "duplicate_id"
+    assert "identifier='clm_01'" in str(error)
+
+
+def test_unknown_reference_error_records_the_optional_owner() -> None:
+    bare = UnknownReferenceError("doc_9", "document")
+    owned = UnknownReferenceError("doc_9", "document", owner="clm_01")
+    assert bare.owner is None
+    assert owned.owner == "clm_01"
+    assert "owner" not in str(bare)
+    assert "owner='clm_01'" in str(owned)
+
+
+def test_graph_invariant_error_is_a_validation_error() -> None:
+    assert issubclass(GraphInvariantError, ValidationError)
+    assert GraphInvariantError("self loop", node="clm_01").exit_code == 2

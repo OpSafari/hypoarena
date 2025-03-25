@@ -10,6 +10,8 @@ from hypoarena.ids import (
     canonical_json,
     content_hash,
     hash_parts,
+    is_valid_id,
+    make_id,
     short_hash,
     stable_hash,
 )
@@ -86,3 +88,52 @@ def test_hash_parts_is_order_sensitive() -> None:
 def test_hash_parts_rejects_unserializable_parts() -> None:
     with pytest.raises(SchemaError):
         hash_parts({"ok": 1}, object())
+
+
+def test_make_id_is_deterministic_and_prefixed() -> None:
+    first = make_id("clm", "x increases y", "scope=cell")
+    assert first == make_id("clm", "x increases y", "scope=cell")
+    assert first.startswith("clm_")
+    assert is_valid_id(first)
+
+
+def test_make_id_separates_different_content() -> None:
+    assert make_id("clm", "a") != make_id("clm", "b")
+    assert make_id("clm", "a") != make_id("evd", "a")
+
+
+def test_make_id_respects_the_digest_length() -> None:
+    assert len(make_id("clm", "a", length=20).split("_")[1]) == 20
+
+
+@pytest.mark.parametrize("prefix", ["cl", "clm", "evd", "hypoaren"])
+def test_make_id_accepts_prefixes_of_two_to_eight_letters(prefix: str) -> None:
+    assert is_valid_id(make_id(prefix, "content"))
+
+
+@pytest.mark.parametrize(
+    "prefix", ["C", "claims1", "c", "clm1", "clm-x", "", "waytoolongprefix"]
+)
+def test_make_id_rejects_malformed_prefixes(prefix: str) -> None:
+    with pytest.raises(ValidationError):
+        make_id(prefix, "content")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("clm_0123456789ab", True),
+        ("evd_abcdef0123456789", True),
+        ("clm_ABC0123456789", False),
+        ("clm_012", False),
+        ("_0123456789ab", False),
+        ("clm0123456789ab", False),
+        ("", False),
+    ],
+)
+def test_is_valid_id_accepts_and_rejects(value: str, expected: bool) -> None:
+    assert is_valid_id(value) is expected
+
+
+def test_is_valid_id_rejects_non_strings() -> None:
+    assert is_valid_id(None) is False  # type: ignore[arg-type]

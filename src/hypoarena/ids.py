@@ -50,3 +50,22 @@ def stable_hash(payload: str, *, length: int = DEFAULT_HASH_LENGTH) -> str:
             maximum=MAX_HASH_LENGTH,
         )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:length]
+
+
+def content_hash(value: object, *, length: int = DEFAULT_HASH_LENGTH) -> str:
+    """Hash any JSON-serializable value through its canonical form."""
+    return stable_hash(canonical_json(value), length=length)
+
+
+def short_hash(text: str, *, length: int = 8) -> str:
+    """Return a short digest meant for display, not for collision resistance."""
+    return stable_hash(text, length=length)
+
+
+def hash_parts(*parts: object, length: int = DEFAULT_HASH_LENGTH) -> str:
+    """Hash an ordered sequence of parts without merging their boundaries.
+
+    Each part is canonicalized separately first, so ``hash_parts("ab")`` and
+    ``hash_parts("a", "b")`` produce different digests.
+    """
+    return content_hash([canonical_json(part) for part in parts], length=length)

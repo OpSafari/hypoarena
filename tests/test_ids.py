@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 
 from hypoarena.errors import SchemaError, ValidationError
-from hypoarena.ids import DEFAULT_HASH_LENGTH, canonical_json, stable_hash
+from hypoarena.ids import (
+    DEFAULT_HASH_LENGTH,
+    canonical_json,
+    content_hash,
+    hash_parts,
+    short_hash,
+    stable_hash,
+)
 
 
 def test_canonical_json_sorts_keys_and_drops_spaces() -> None:
@@ -47,3 +54,35 @@ def test_stable_hash_rejects_bad_length_and_payload() -> None:
         stable_hash("x", length=65)
     with pytest.raises(SchemaError):
         stable_hash(b"bytes")  # type: ignore[arg-type]
+
+
+def test_content_hash_ignores_key_order() -> None:
+    assert content_hash({"a": 1, "b": 2}) == content_hash({"b": 2, "a": 1})
+
+
+def test_content_hash_separates_values_and_types() -> None:
+    assert content_hash({"a": 1}) != content_hash({"a": "1"})
+    assert content_hash([1, 2]) != content_hash([2, 1])
+
+
+def test_content_hash_accepts_a_custom_length() -> None:
+    assert len(content_hash({"a": 1}, length=32)) == 32
+
+
+def test_short_hash_defaults_to_eight_characters() -> None:
+    assert len(short_hash("display")) == 8
+    assert short_hash("display") == short_hash("display")
+
+
+def test_hash_parts_keeps_part_boundaries() -> None:
+    assert hash_parts("ab") != hash_parts("a", "b")
+    assert hash_parts("a", "b") == hash_parts("a", "b")
+
+
+def test_hash_parts_is_order_sensitive() -> None:
+    assert hash_parts("a", "b") != hash_parts("b", "a")
+
+
+def test_hash_parts_rejects_unserializable_parts() -> None:
+    with pytest.raises(SchemaError):
+        hash_parts({"ok": 1}, object())

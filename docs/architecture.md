@@ -47,5 +47,8 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | --- | --- |
 | `hypoarena._version` | 版本号单一来源 |
 | `hypoarena.cli` | 命令行入口与参数解析 |
+| `hypoarena.errors` | 异常层级与稳定错误码，供 CLI 退出码使用 |
+| `hypoarena.ids` | 确定性内容哈希与 ID 构造，支撑 provenance 与 golden 测试 |
+| `hypoarena.text` | 归一化、分词、n-gram、数字与否定线索提取 |
 
 模块表随实现推进补充；接口约定见 [api.md](api.md)。

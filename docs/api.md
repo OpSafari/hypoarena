@@ -23,6 +23,9 @@
 | --- | --- | --- |
 | `hypoarena._version` | 已实现 | 版本号（`__version__`、`VERSION_TUPLE`） |
 | `hypoarena.cli` | 已实现 | 参数解析与子命令入口（`main`、`build_parser`） |
+| `hypoarena.errors` | 已实现 | 异常层级，每个错误带稳定 `code` 与 `exit_code`（`ERROR_CODES`、`error_for_code`） |
+| `hypoarena.ids` | 已实现 | 确定性哈希与 ID（`canonical_json`、`stable_hash`、`content_hash`、`hash_parts`、`make_id`、`is_valid_id`） |
+| `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
 
 后续模块（schema、graph、corpus、grounding、agents、tournament、dedup、evolve、
 belief、runner、artifacts、reports）落地后会补充到本表。

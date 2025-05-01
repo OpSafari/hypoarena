@@ -191,3 +191,18 @@ def test_sentence_split_keeps_a_single_unterminated_sentence() -> None:
 
 def test_sentence_split_over_splits_abbreviations_by_design() -> None:
     assert sentence_split("See Fig. 2 for details.") == ["See Fig.", "2 for details."]
+
+
+def test_strip_punctuation_keeps_contractions_as_single_tokens() -> None:
+    assert strip_punctuation("doesn't") == "doesnt"
+    assert (
+        strip_punctuation("the assay doesn’t replicate") == "the assay doesnt replicate"
+    )
+
+
+def test_strip_punctuation_leaves_trailing_apostrophes_alone() -> None:
+    assert strip_punctuation("the cells' response") == "the cells  response"
+
+
+def test_tokenize_yields_one_token_per_contraction() -> None:
+    assert tokenize("Binding doesn't occur") == ["binding", "doesnt", "occur"]

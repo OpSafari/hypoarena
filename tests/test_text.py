@@ -13,6 +13,7 @@ from hypoarena.text import (
     fold_accents,
     normalize,
     normalize_whitespace,
+    sentence_split,
     strip_punctuation,
     tokenize,
     word_ngrams,
@@ -160,3 +161,33 @@ def test_extract_numbers_partially_reads_dotted_version_strings() -> None:
 
 def test_extract_numbers_returns_empty_list_without_digits() -> None:
     assert extract_numbers("no numeric content here") == []
+
+
+def test_sentence_split_separates_on_terminal_punctuation() -> None:
+    text = "Protein A binds B. Binding is dose dependent! Does it matter?"
+    assert sentence_split(text) == [
+        "Protein A binds B.",
+        "Binding is dose dependent!",
+        "Does it matter?",
+    ]
+
+
+def test_sentence_split_preserves_case_and_inner_punctuation() -> None:
+    assert sentence_split("Levels rise (2x). Then they fall.") == [
+        "Levels rise (2x).",
+        "Then they fall.",
+    ]
+
+
+def test_sentence_split_returns_empty_list_for_blank_input() -> None:
+    assert sentence_split("   ") == []
+
+
+def test_sentence_split_keeps_a_single_unterminated_sentence() -> None:
+    assert sentence_split("no terminal punctuation here") == [
+        "no terminal punctuation here"
+    ]
+
+
+def test_sentence_split_over_splits_abbreviations_by_design() -> None:
+    assert sentence_split("See Fig. 2 for details.") == ["See Fig.", "2 for details."]

@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any
+from enum import Enum
+from typing import Any, TypeVar
 
 from hypoarena.errors import SchemaError
+
+EnumT = TypeVar("EnumT", bound=Enum)
 
 
 def require_mapping(value: object, *, field: str) -> dict[str, Any]:
@@ -193,3 +196,86 @@ def require_bool(mapping: Mapping[str, Any], key: str, *, field: str) -> bool:
             got=type(value).__name__,
         )
     return value
+
+
+def require_enum(
+    mapping: Mapping[str, Any],
+    key: str,
+    enum_type: type[EnumT],
+    *,
+    field: str,
+) -> EnumT:
+    """Read ``key`` as a member of ``enum_type``, listing valid values on error."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, enum_type):
+        return value
+    if not isinstance(value, str):
+        raise SchemaError(
+            f"{field}.{key} must be a string",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    try:
+        return enum_type(value)
+    except ValueError:
+        allowed = [member.value for member in enum_type]
+        raise SchemaError(
+            f"{field}.{key} is not a valid {enum_type.__name__}",
+            field=field,
+            key=key,
+            got=value,
+            allowed=allowed,
+        ) from None
+
+
+def require_str_tuple(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    field: str,
+    allow_empty: bool = False,
+    minimum_items: int = 0,
+    maximum_items: int | None = None,
+) -> tuple[str, ...]:
+    """Read ``key`` as a list of non-blank strings and return it as a tuple."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise SchemaError(
+            f"{field}.{key} must be a list",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    items = tuple(
+        require_str({"v": item}, "v", field=f"{field}.{key}", allow_empty=allow_empty)
+        for item in value
+    )
+    if len(items) < minimum_items:
+        raise SchemaError(
+            f"{field}.{key} needs at least {minimum_items} item(s)",
+            field=field,
+            key=key,
+            count=len(items),
+        )
+    if maximum_items is not None and len(items) > maximum_items:
+        raise SchemaError(
+            f"{field}.{key} accepts at most {maximum_items} item(s)",
+            field=field,
+            key=key,
+            count=len(items),
+        )
+    return items
+
+
+def optional_str(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    field: str,
+    allow_empty: bool = False,
+) -> str | None:
+    """Read ``key`` as a string, accepting ``None`` and absent keys."""
+    if key not in mapping or mapping[key] is None:
+        return None
+    return require_str(mapping, key, field=field, allow_empty=allow_empty)

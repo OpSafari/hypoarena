@@ -8,6 +8,7 @@ constructor. Coercion is deliberately narrow: types are checked, not guessed.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -93,3 +94,102 @@ def check_schema_version(
             expected=expected,
         )
     return found
+
+
+def present_value(mapping: Mapping[str, Any], key: str, *, field: str) -> Any:
+    """Return ``mapping[key]`` or raise a schema error naming the missing key."""
+    if key not in mapping:
+        raise SchemaError(f"{field} is missing '{key}'", field=field, key=key)
+    return mapping[key]
+
+
+def check_range(
+    value: float,
+    *,
+    field: str,
+    key: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    """Validate inclusive numeric bounds, reporting which side was violated."""
+    if minimum is not None and value < minimum:
+        raise SchemaError(
+            f"{field}.{key} is below the minimum",
+            field=field,
+            key=key,
+            value=value,
+            minimum=minimum,
+        )
+    if maximum is not None and value > maximum:
+        raise SchemaError(
+            f"{field}.{key} is above the maximum",
+            field=field,
+            key=key,
+            value=value,
+            maximum=maximum,
+        )
+    return value
+
+
+def require_int(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    field: str,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    """Read ``key`` as an integer within optional inclusive bounds.
+
+    Booleans are rejected: ``True`` is an ``int`` subclass in Python, and
+    accepting it would let ``{"start": true}`` pass as offset 1.
+    """
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SchemaError(
+            f"{field}.{key} must be an integer",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    check_range(value, field=field, key=key, minimum=minimum, maximum=maximum)
+    return value
+
+
+def require_float(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    field: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    """Read ``key`` as a finite float within optional inclusive bounds."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SchemaError(
+            f"{field}.{key} must be a number",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    number = float(value)
+    if not math.isfinite(number):
+        raise SchemaError(
+            f"{field}.{key} must be finite", field=field, key=key, value=value
+        )
+    check_range(number, field=field, key=key, minimum=minimum, maximum=maximum)
+    return number
+
+
+def require_bool(mapping: Mapping[str, Any], key: str, *, field: str) -> bool:
+    """Read ``key`` as a real boolean; no truthiness coercion is performed."""
+    value = present_value(mapping, key, field=field)
+    if not isinstance(value, bool):
+        raise SchemaError(
+            f"{field}.{key} must be a boolean",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    return value

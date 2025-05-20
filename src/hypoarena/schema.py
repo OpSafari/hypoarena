@@ -13,6 +13,7 @@ Design rules used throughout this module:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from enum import StrEnum, unique
 
@@ -21,6 +22,7 @@ from hypoarena.ids import canonical_json, is_valid_id
 from hypoarena.text import normalize
 
 SCHEMA_VERSION = "1.0"
+_HEX_PATTERN = re.compile(r"[0-9a-f]{8,64}")
 
 
 @unique
@@ -200,4 +202,61 @@ class Citation:
             self.document_id == other.document_id
             and self.start < other.end
             and other.start < self.end
+        )
+
+
+PROVENANCE_ORIGINS = frozenset({"synthetic", "agent", "user", "evolved"})
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """Where a record came from, with enough detail to replay its creation.
+
+    ``origin`` is one of :data:`PROVENANCE_ORIGINS`. Agent-produced records must
+    name their agent; evolved records must name their parents. ``seed`` and
+    ``corpus_hash`` make a synthetic record reproducible from its inputs alone.
+    """
+
+    origin: str
+    agent_id: str | None = None
+    generation: int = 0
+    parents: tuple[str, ...] = ()
+    seed: int | None = None
+    corpus_hash: str | None = None
+    notes: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.origin not in PROVENANCE_ORIGINS:
+            raise ValidationError(
+                "unknown provenance origin",
+                origin=self.origin,
+                allowed=sorted(PROVENANCE_ORIGINS),
+            )
+        if self.origin == "agent" and not (self.agent_id or "").strip():
+            raise ValidationError("agent provenance requires an agent_id")
+        if self.origin == "evolved" and not self.parents:
+            raise ValidationError("evolved provenance requires at least one parent")
+        if self.generation < 0:
+            raise ValidationError("generation must be >= 0", generation=self.generation)
+        for parent in self.parents:
+            if not is_valid_id(parent):
+                raise ValidationError(
+                    "provenance parent id is malformed", parent=parent
+                )
+        if self.corpus_hash is not None and not _HEX_PATTERN.fullmatch(
+            self.corpus_hash
+        ):
+            raise ValidationError(
+                "corpus_hash must be 8-64 hex characters", corpus_hash=self.corpus_hash
+            )
+        if self.notes is not None and not self.notes.strip():
+            raise ValidationError("provenance notes must not be blank when present")
+
+    @property
+    def is_reproducible(self) -> bool:
+        """True when a seed and corpus hash are recorded for synthetic origins."""
+        return (
+            self.origin == "synthetic"
+            and self.seed is not None
+            and bool(self.corpus_hash)
         )

@@ -46,3 +46,40 @@ class ClaimRelation(StrEnum):
     ENTAILS = "entails"
     CONTRADICTS = "contradicts"
     REFINES = "refines"
+
+
+DIRECTIONAL_RELATIONS: frozenset[PredictedRelation] = frozenset(
+    {
+        PredictedRelation.INCREASES,
+        PredictedRelation.DECREASES,
+        PredictedRelation.ENABLES,
+        PredictedRelation.INHIBITS,
+        PredictedRelation.CAUSES,
+    }
+)
+RELATION_OPPOSITES: dict[PredictedRelation, PredictedRelation] = {
+    PredictedRelation.INCREASES: PredictedRelation.DECREASES,
+    PredictedRelation.DECREASES: PredictedRelation.INCREASES,
+    PredictedRelation.ENABLES: PredictedRelation.INHIBITS,
+    PredictedRelation.INHIBITS: PredictedRelation.ENABLES,
+}
+
+
+def is_directional(relation: PredictedRelation) -> bool:
+    """True when the relation asserts a direction rather than mere association."""
+    return relation in DIRECTIONAL_RELATIONS
+
+
+def opposite_relation(relation: PredictedRelation) -> PredictedRelation | None:
+    """Return the opposing relation, or ``None`` when there is none.
+
+    ``causes`` and ``associates`` have no opposite in this schema: negating a
+    causal claim is done by attaching refuting evidence, not by flipping the
+    relation label.
+    """
+    return RELATION_OPPOSITES.get(relation)
+
+
+def relations_conflict(first: PredictedRelation, second: PredictedRelation) -> bool:
+    """True when two relations over the same variable pair cannot both hold."""
+    return opposite_relation(first) is second

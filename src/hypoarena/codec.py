@@ -8,12 +8,14 @@ constructor. Coercion is deliberately narrow: types are checked, not guessed.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, TypeVar
 
 from hypoarena.errors import SchemaError
+from hypoarena.ids import canonical_json
 
 EnumT = TypeVar("EnumT", bound=Enum)
 
@@ -279,3 +281,34 @@ def optional_str(
     if key not in mapping or mapping[key] is None:
         return None
     return require_str(mapping, key, field=field, allow_empty=allow_empty)
+
+
+def dumps_line(value: object) -> str:
+    """Serialize ``value`` as one canonical JSON line ending in a newline.
+
+    Keys are sorted and separators are fixed, so equal payloads always produce
+    byte-identical lines — the property that makes JSONL artifacts diffable and
+    lets checkpointed runs be compared byte for byte.
+    """
+    return canonical_json(value) + "\n"
+
+
+def loads_line(
+    line: str, *, field: str, line_number: int | None = None
+) -> dict[str, Any]:
+    """Decode one JSONL line into a mapping, reporting the offending line."""
+    stripped = line.strip()
+    if not stripped:
+        raise SchemaError(
+            f"{field} line is empty", field=field, line_number=line_number
+        )
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError as error:
+        raise SchemaError(
+            f"{field} line is not valid JSON",
+            field=field,
+            line_number=line_number,
+            reason=str(error),
+        ) from None
+    return require_mapping(payload, field=field)

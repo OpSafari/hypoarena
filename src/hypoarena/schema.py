@@ -14,11 +14,12 @@ Design rules used throughout this module:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 
 from hypoarena.errors import ValidationError
-from hypoarena.ids import canonical_json, is_valid_id
+from hypoarena.ids import canonical_json, content_hash, is_valid_id
 from hypoarena.text import normalize
 
 SCHEMA_VERSION = "1.0"
@@ -259,4 +260,126 @@ class Provenance:
             self.origin == "synthetic"
             and self.seed is not None
             and bool(self.corpus_hash)
+        )
+
+
+CLAIM_ID_PREFIX = "clm"
+EVIDENCE_ID_PREFIX = "evd"
+
+
+def check_record_id(identifier: str, prefix: str, kind: str) -> None:
+    """Validate a record id: well formed and carrying the expected prefix."""
+    if not is_valid_id(identifier) or not identifier.startswith(f"{prefix}_"):
+        raise ValidationError(
+            f"{kind} id is malformed",
+            identifier=identifier,
+            expected_prefix=f"{prefix}_",
+        )
+
+
+def check_unique_citations(citations: Sequence[Citation], kind: str) -> None:
+    """Reject repeated spans inside one record's citation list."""
+    seen: set[tuple[str, int, int]] = set()
+    for citation in citations:
+        if not isinstance(citation, Citation):
+            raise ValidationError(
+                f"{kind} citations must be Citation objects", kind=kind
+            )
+        if citation.key() in seen:
+            raise ValidationError(
+                f"{kind} cites the same span twice",
+                kind=kind,
+                span=list(citation.key()),
+            )
+        seen.add(citation.key())
+
+
+@dataclass(frozen=True)
+class Claim:
+    """A falsifiable statement relating two variables within a scope.
+
+    ``subject`` and ``object`` are the claim's variables (for example a gene and
+    a phenotype); ``relation`` is the predicted direction between them. A claim
+    may be uncited — the grounding verifier grades that instead of the schema
+    rejecting it, because proposals start ungrounded and earn citations later.
+    """
+
+    claim_id: str
+    statement: str
+    subject: str
+    object: str
+    relation: PredictedRelation
+    scope: Scope
+    citations: tuple[Citation, ...] = ()
+    mechanism: str | None = None
+    provenance: Provenance = field(default_factory=lambda: Provenance(origin="user"))
+
+    def __post_init__(self) -> None:
+        check_record_id(self.claim_id, CLAIM_ID_PREFIX, "claim")
+        if not self.statement.strip():
+            raise ValidationError(
+                "claim statement must not be blank", claim_id=self.claim_id
+            )
+        if not self.subject.strip() or not self.object.strip():
+            raise ValidationError(
+                "claim variables must not be blank", claim_id=self.claim_id
+            )
+        if normalize(self.subject) == normalize(self.object):
+            raise ValidationError(
+                "claim subject and object must differ",
+                claim_id=self.claim_id,
+                subject=self.subject,
+            )
+        if not isinstance(self.relation, PredictedRelation):
+            raise ValidationError(
+                "claim relation must be a PredictedRelation",
+                claim_id=self.claim_id,
+                got=type(self.relation).__name__,
+            )
+        if not isinstance(self.scope, Scope):
+            raise ValidationError(
+                "claim scope must be a Scope",
+                claim_id=self.claim_id,
+                got=type(self.scope).__name__,
+            )
+        check_unique_citations(self.citations, "claim")
+        if self.mechanism is not None and not self.mechanism.strip():
+            raise ValidationError(
+                "claim mechanism must not be blank when present", claim_id=self.claim_id
+            )
+        if not isinstance(self.provenance, Provenance):
+            raise ValidationError(
+                "claim provenance must be a Provenance", claim_id=self.claim_id
+            )
+
+    @property
+    def variables(self) -> tuple[str, str]:
+        """The ordered variable pair this claim relates."""
+        return (self.subject, self.object)
+
+    @property
+    def is_cited(self) -> bool:
+        """True when at least one corpus span backs the claim."""
+        return bool(self.citations)
+
+    def normalized_statement(self) -> str:
+        """Return the statement after the standard normalization chain."""
+        return normalize(self.statement)
+
+    def signature(self) -> str:
+        """Return a content signature for dedup and novelty checks.
+
+        The signature covers the normalized statement, both variables, the
+        relation and the scope signature — deliberately not the citations or the
+        identifier, so restating the same hypothesis with new sources still
+        counts as a duplicate.
+        """
+        return content_hash(
+            {
+                "statement": normalize(self.statement),
+                "subject": normalize(self.subject),
+                "object": normalize(self.object),
+                "relation": self.relation.value,
+                "scope": self.scope.signature(),
+            }
         )

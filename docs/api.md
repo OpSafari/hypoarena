@@ -25,7 +25,11 @@
 | `hypoarena.cli` | 已实现 | 参数解析与子命令入口（`main`、`build_parser`） |
 | `hypoarena.errors` | 已实现 | 异常层级，每个错误带稳定 `code` 与 `exit_code`（`ERROR_CODES`、`error_for_code`） |
 | `hypoarena.ids` | 已实现 | 确定性哈希与 ID（`canonical_json`、`stable_hash`、`content_hash`、`hash_parts`、`make_id`、`is_valid_id`） |
+| `hypoarena.codec` | 已实现 | 严格解码与规范 JSONL 行（`require_*`、`reject_unknown_keys`、`check_schema_version`、`dumps_line`、`loads_line`） |
+| `hypoarena.schema` | 已实现 | 记录与枚举（`Claim`、`Evidence`、`Citation`、`Scope`、`Provenance`、`PredictedRelation`、`EvidencePolarity`、`ClaimRelation`） |
+| `hypoarena.serialize` | 已实现 | 记录 ↔ dict/JSONL 编解码（`claim_to_dict`、`claim_from_line`、`evidence_to_line` 等） |
 | `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
 
-后续模块（schema、graph、corpus、grounding、agents、tournament、dedup、evolve、
-belief、runner、artifacts、reports）落地后会补充到本表。
+记录字段与校验规则详见 [schema.md](schema.md)。后续模块（graph、corpus、
+grounding、agents、tournament、dedup、evolve、belief、runner、artifacts、reports）
+落地后会补充到本表。

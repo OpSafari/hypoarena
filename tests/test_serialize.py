@@ -11,6 +11,8 @@ from hypoarena.errors import SchemaError, ValidationError
 from hypoarena.schema import (
     Citation,
     Claim,
+    Evidence,
+    EvidencePolarity,
     PredictedRelation,
     Provenance,
     Scope,
@@ -22,6 +24,10 @@ from hypoarena.serialize import (
     claim_from_line,
     claim_to_dict,
     claim_to_line,
+    evidence_from_dict,
+    evidence_from_line,
+    evidence_to_dict,
+    evidence_to_line,
     provenance_from_dict,
     provenance_to_dict,
     scope_from_dict,
@@ -180,4 +186,79 @@ def test_claim_line_is_canonical_and_idempotent() -> None:
     line = claim_to_line(golden_claim())
     assert line.endswith("\n")
     assert "\n" not in line[:-1]
+    assert dumps_line(json.loads(line)) == line
+
+
+def golden_evidence() -> Evidence:
+    return Evidence(
+        evidence_id="evd_0123456789ab",
+        statement="ChIP-seq shows binding enrichment at the promoter",
+        polarity=EvidencePolarity.SUPPORT,
+        strength=0.8,
+        citations=(Citation("doc_0123456789ab", 10, 25, "kinase binds"),),
+        method="synthetic_finding",
+        provenance=Provenance(
+            origin="synthetic", seed=270106, corpus_hash="0123456789abcdef"
+        ),
+        effect_size=1.25,
+        sample_size=48,
+    )
+
+
+def test_evidence_to_dict_is_golden() -> None:
+    assert evidence_to_dict(golden_evidence()) == {
+        "schema_version": "1.0",
+        "evidence_id": "evd_0123456789ab",
+        "statement": "ChIP-seq shows binding enrichment at the promoter",
+        "polarity": "support",
+        "strength": 0.8,
+        "citations": [
+            {
+                "document_id": "doc_0123456789ab",
+                "start": 10,
+                "end": 25,
+                "quote": "kinase binds",
+            }
+        ],
+        "method": "synthetic_finding",
+        "provenance": {
+            "origin": "synthetic",
+            "agent_id": None,
+            "generation": 0,
+            "parents": [],
+            "seed": 270106,
+            "corpus_hash": "0123456789abcdef",
+            "notes": None,
+        },
+        "effect_size": 1.25,
+        "sample_size": 48,
+    }
+
+
+def test_evidence_roundtrips_through_dict_and_line() -> None:
+    evidence = golden_evidence()
+    assert evidence_from_dict(evidence_to_dict(evidence)) == evidence
+    assert evidence_from_line(evidence_to_line(evidence)) == evidence
+
+
+def test_evidence_from_dict_enforces_strength_bounds() -> None:
+    payload = evidence_to_dict(golden_evidence())
+    payload["strength"] = 1.5
+    with pytest.raises(SchemaError, match="above the maximum"):
+        evidence_from_dict(payload)
+
+
+def test_evidence_from_dict_rejects_unknown_polarity_and_keys() -> None:
+    payload = evidence_to_dict(golden_evidence())
+    payload["polarity"] = "maybe"
+    with pytest.raises(SchemaError, match="not a valid EvidencePolarity"):
+        evidence_from_dict(payload)
+    payload = evidence_to_dict(golden_evidence())
+    payload["reviewer"] = "anon"
+    with pytest.raises(SchemaError, match="unknown keys"):
+        evidence_from_dict(payload)
+
+
+def test_evidence_line_is_canonical() -> None:
+    line = evidence_to_line(golden_evidence())
     assert dumps_line(json.loads(line)) == line

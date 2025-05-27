@@ -269,3 +269,80 @@ class HypothesisGraph:
             )
         group.remove(edge)
         self._incoming[edge.target].remove(edge)
+
+    def outgoing(
+        self, claim_id: str, relation: ClaimRelation | None = None
+    ) -> tuple[ClaimEdge, ...]:
+        """Edges starting at ``claim_id``, optionally filtered by relation."""
+        self.claim(claim_id)
+        edges = self._edges.get(claim_id, ())
+        if relation is not None:
+            edges = [edge for edge in edges if edge.relation is relation]
+        return tuple(sorted(edges, key=lambda edge: edge.key()))
+
+    def incoming(
+        self, claim_id: str, relation: ClaimRelation | None = None
+    ) -> tuple[ClaimEdge, ...]:
+        """Edges ending at ``claim_id``, optionally filtered by relation."""
+        self.claim(claim_id)
+        edges = self._incoming.get(claim_id, ())
+        if relation is not None:
+            edges = [edge for edge in edges if edge.relation is relation]
+        return tuple(sorted(edges, key=lambda edge: edge.key()))
+
+    def targets(
+        self, claim_id: str, relation: ClaimRelation | None = None
+    ) -> tuple[str, ...]:
+        """Sorted identifiers reachable in one outgoing step."""
+        return tuple(
+            sorted({edge.target for edge in self.outgoing(claim_id, relation)})
+        )
+
+    def sources(
+        self, claim_id: str, relation: ClaimRelation | None = None
+    ) -> tuple[str, ...]:
+        """Sorted identifiers with an incoming step into ``claim_id``."""
+        return tuple(
+            sorted({edge.source for edge in self.incoming(claim_id, relation)})
+        )
+
+    def neighbors(self, claim_id: str) -> tuple[str, ...]:
+        """Sorted identifiers connected in either direction."""
+        return tuple(sorted(set(self.targets(claim_id)) | set(self.sources(claim_id))))
+
+    def has_path(
+        self,
+        source: str,
+        target: str,
+        relations: frozenset[ClaimRelation] | None = None,
+    ) -> bool:
+        """True when ``target`` is reachable from ``source`` over outgoing edges.
+
+        Traversal is breadth-first over a deterministic frontier (sorted
+        identifiers), so the result never depends on insertion order. A relation
+        filter restricts which edge types may be used; ``source == target`` is
+        reported as reachable only when a real cycle exists.
+        """
+        self.claim(source)
+        self.claim(target)
+        frontier = [source]
+        seen = {source}
+        while frontier:
+            current = frontier.pop(0)
+            for edge in self.outgoing(current):
+                if relations is not None and edge.relation not in relations:
+                    continue
+                if edge.target == target:
+                    return True
+                if edge.target not in seen:
+                    seen.add(edge.target)
+                    frontier.append(edge.target)
+        return False
+
+    def roots(self) -> tuple[str, ...]:
+        """Claims with no incoming relations, sorted."""
+        return tuple(cid for cid in self.claim_ids if not self._incoming.get(cid))
+
+    def leaves(self) -> tuple[str, ...]:
+        """Claims with no outgoing relations, sorted."""
+        return tuple(cid for cid in self.claim_ids if not self._edges.get(cid))

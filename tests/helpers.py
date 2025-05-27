@@ -13,6 +13,8 @@ from typing import Any
 from hypoarena.schema import (
     Citation,
     Claim,
+    Evidence,
+    EvidencePolarity,
     PredictedRelation,
     Provenance,
     Scope,
@@ -75,3 +77,24 @@ def sample_claim(**overrides: Any) -> Claim:
     }
     payload.update(overrides)
     return Claim(**payload)
+
+
+EVIDENCE_ID = "evd_0123456789ab"
+OTHER_EVIDENCE_ID = "evd_ffffffffffff"
+
+
+def sample_evidence(**overrides: Any) -> Evidence:
+    """Return supporting evidence drawn from the synthetic finding stream."""
+    payload: dict[str, Any] = {
+        "evidence_id": EVIDENCE_ID,
+        "statement": "ChIP-seq shows binding enrichment at the promoter",
+        "polarity": EvidencePolarity.SUPPORT,
+        "strength": 0.8,
+        "citations": (sample_citation(),),
+        "method": "synthetic_finding",
+        "provenance": Provenance(
+            origin="synthetic", seed=270106, corpus_hash=CORPUS_HASH
+        ),
+    }
+    payload.update(overrides)
+    return Evidence(**payload)

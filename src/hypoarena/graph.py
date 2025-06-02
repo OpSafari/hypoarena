@@ -397,3 +397,94 @@ class HypothesisGraph:
         self._backlinks.clear()
         self._edges.clear()
         self._incoming.clear()
+
+    def validate(self) -> None:
+        """Re-check every structural invariant, raising on the first violation.
+
+        Mutation methods already refuse illegal operations; this sweep exists so
+        that operators which build graphs indirectly (deserialization, merging,
+        evolution) can prove their result is sound, and so tests can detect
+        index corruption introduced by future refactors.
+        """
+        for index, claim in self._claims.items():
+            if claim.claim_id != index:
+                raise GraphInvariantError(
+                    "claim index disagrees with the record identifier",
+                    index=index,
+                    record=claim.claim_id,
+                )
+        for index, evidence in self._evidence.items():
+            if evidence.evidence_id != index:
+                raise GraphInvariantError(
+                    "evidence index disagrees with the record identifier",
+                    index=index,
+                    record=evidence.evidence_id,
+                )
+        for claim_id, items in self._links.items():
+            if claim_id not in self._claims:
+                raise GraphInvariantError(
+                    "link references a missing claim", claim_id=claim_id
+                )
+            if len(set(items)) != len(items):
+                raise GraphInvariantError(
+                    "claim has duplicate evidence links", claim_id=claim_id
+                )
+            for evidence_id in items:
+                if evidence_id not in self._evidence:
+                    raise GraphInvariantError(
+                        "link references missing evidence",
+                        claim_id=claim_id,
+                        evidence_id=evidence_id,
+                    )
+                if claim_id not in self._backlinks.get(evidence_id, ()):
+                    raise GraphInvariantError(
+                        "backlink index is missing a link",
+                        claim_id=claim_id,
+                        evidence_id=evidence_id,
+                    )
+        for evidence_id, claim_ids in self._backlinks.items():
+            if evidence_id not in self._evidence:
+                raise GraphInvariantError(
+                    "backlink references missing evidence", evidence_id=evidence_id
+                )
+            for claim_id in claim_ids:
+                if evidence_id not in self._links.get(claim_id, ()):
+                    raise GraphInvariantError(
+                        "link index is missing a backlink",
+                        claim_id=claim_id,
+                        evidence_id=evidence_id,
+                    )
+        seen: set[tuple[str, str, str]] = set()
+        for source, group in self._edges.items():
+            if source not in self._claims:
+                raise GraphInvariantError(
+                    "edge index references a missing claim", claim_id=source
+                )
+            for edge in group:
+                if edge.source != source:
+                    raise GraphInvariantError(
+                        "edge is filed under the wrong source",
+                        index=source,
+                        edge=list(edge.key()),
+                    )
+                if edge.target not in self._claims:
+                    raise GraphInvariantError(
+                        "edge references a missing claim", edge=list(edge.key())
+                    )
+                if edge.key() in seen:
+                    raise GraphInvariantError("duplicate edge", edge=list(edge.key()))
+                seen.add(edge.key())
+                if edge not in self._incoming.get(edge.target, ()):
+                    raise GraphInvariantError(
+                        "incoming index is missing an edge", edge=list(edge.key())
+                    )
+        for target, group in self._incoming.items():
+            if target not in self._claims:
+                raise GraphInvariantError(
+                    "incoming index references a missing claim", claim_id=target
+                )
+            for edge in group:
+                if edge not in self._edges.get(edge.source, ()):
+                    raise GraphInvariantError(
+                        "edge index is missing an incoming edge", edge=list(edge.key())
+                    )

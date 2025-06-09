@@ -13,6 +13,7 @@ can pin. Conventions:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from hypoarena.codec import (
@@ -32,6 +33,7 @@ from hypoarena.codec import (
     require_str,
     require_str_tuple,
 )
+from hypoarena.errors import SchemaError
 from hypoarena.graph import ClaimEdge, HypothesisGraph
 from hypoarena.schema import (
     SCHEMA_VERSION,
@@ -322,3 +324,142 @@ def graph_from_dict(payload: object, *, field: str = "graph") -> HypothesisGraph
         graph.add_edge(edge.source, edge.target, edge.relation, note=edge.note)
     graph.validate()
     return graph
+
+
+RECORD_TYPES = ("meta", "claim", "evidence", "link", "edge")
+RECORD_KEYS_BY_TYPE = "record"
+META_KEYS = ("record", "schema_version", "counts", "signature")
+COUNT_KEYS = ("claims", "evidence", "links", "edges")
+
+
+def graph_meta_line(graph: HypothesisGraph) -> str:
+    """Return the header line carrying counts and the graph signature."""
+    stats = graph.stats()
+    return dumps_line(
+        {
+            "record": "meta",
+            "schema_version": SCHEMA_VERSION,
+            "counts": {
+                "claims": stats.claims,
+                "evidence": stats.evidence,
+                "links": stats.links,
+                "edges": stats.edges,
+            },
+            "signature": graph.signature(),
+        }
+    )
+
+
+def graph_to_lines(graph: HypothesisGraph, *, include_meta: bool = True) -> list[str]:
+    """Serialize a graph as an ordered list of JSONL lines.
+
+    Order is meta, claims, evidence, links, edges — dependencies before the
+    records that reference them, so a reader can rebuild the graph in a single
+    forward pass without backtracking.
+    """
+    lines = [graph_meta_line(graph)] if include_meta else []
+    lines.extend(
+        dumps_line({"record": "claim", "claim": claim_to_dict(claim)})
+        for claim in graph.claims
+    )
+    lines.extend(
+        dumps_line({"record": "evidence", "evidence": evidence_to_dict(item)})
+        for item in graph.evidence_items
+    )
+    lines.extend(
+        dumps_line({"record": "link", "claim_id": claim_id, "evidence_id": evidence_id})
+        for claim_id, evidence_id in graph.link_pairs()
+    )
+    lines.extend(
+        dumps_line({"record": "edge", **edge_to_dict(edge)}) for edge in graph.edges
+    )
+    return lines
+
+
+def graph_to_text(graph: HypothesisGraph, *, include_meta: bool = True) -> str:
+    """Return the whole JSONL document as one string."""
+    return "".join(graph_to_lines(graph, include_meta=include_meta))
+
+
+def graph_from_lines(
+    lines: Iterable[str], *, verify_meta: bool = True
+) -> HypothesisGraph:
+    """Rebuild a graph from JSONL lines, checking the header when present."""
+    graph = HypothesisGraph()
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="graph", line_number=number)
+        record = require_str(payload, "record", field=f"graph[{number}]")
+        if record not in RECORD_TYPES:
+            raise SchemaError(
+                "unknown graph record type",
+                field=f"graph[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"graph[{number}]")
+            check_schema_version(
+                payload, field=f"graph[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        elif record == "claim":
+            graph.add_claim(
+                claim_from_dict(payload["claim"], field=f"graph[{number}].claim")
+            )
+        elif record == "evidence":
+            graph.add_evidence(
+                evidence_from_dict(
+                    payload["evidence"], field=f"graph[{number}].evidence"
+                )
+            )
+        elif record == "link":
+            reject_unknown_keys(
+                payload, ("record", *LINK_KEYS), field=f"graph[{number}]"
+            )
+            graph.link_evidence(
+                require_str(payload, "claim_id", field=f"graph[{number}]"),
+                require_str(payload, "evidence_id", field=f"graph[{number}]"),
+            )
+        else:
+            edge_payload = {
+                key: value for key, value in payload.items() if key != "record"
+            }
+            edge = edge_from_dict(edge_payload, field=f"graph[{number}]")
+            graph.add_edge(edge.source, edge.target, edge.relation, note=edge.note)
+    graph.validate()
+    if meta is not None and verify_meta:
+        counts = require_mapping(meta["counts"], field="graph.meta.counts")
+        reject_unknown_keys(counts, COUNT_KEYS, field="graph.meta.counts")
+        stats = graph.stats()
+        actual = {
+            "claims": stats.claims,
+            "evidence": stats.evidence,
+            "links": stats.links,
+            "edges": stats.edges,
+        }
+        expected = {
+            key: require_int(counts, key, field="graph.meta.counts")
+            for key in COUNT_KEYS
+        }
+        if actual != expected:
+            raise SchemaError(
+                "graph document counts disagree with its header",
+                expected=expected,
+                actual=actual,
+            )
+        if require_str(meta, "signature", field="graph.meta") != graph.signature():
+            raise SchemaError(
+                "graph document signature disagrees with its header",
+                recorded=meta["signature"],
+                computed=graph.signature(),
+            )
+    return graph
+
+
+def graph_from_text(text: str, *, verify_meta: bool = True) -> HypothesisGraph:
+    """Rebuild a graph from a JSONL document string."""
+    return graph_from_lines(text.splitlines(), verify_meta=verify_meta)

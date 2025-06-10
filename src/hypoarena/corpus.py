@@ -18,6 +18,7 @@ from hypoarena.errors import (
     ValidationError,
 )
 from hypoarena.ids import (
+    content_hash,
     is_valid_id,
 )
 from hypoarena.schema import (
@@ -191,6 +192,46 @@ class Corpus:
     def __iter__(self) -> Iterator[Document]:
         return iter(self.documents)
 
+    def stats(self) -> CorpusStats:
+        """Summarize corpus shape; an empty corpus reports zeros."""
+        lengths = [document.length for document in self._documents.values()]
+        sources: dict[str, int] = {}
+        for document in self._documents.values():
+            sources[document.source] = sources.get(document.source, 0) + 1
+        characters = sum(lengths)
+        return CorpusStats(
+            documents=len(lengths),
+            characters=characters,
+            shortest=min(lengths, default=0),
+            longest=max(lengths, default=0),
+            mean_length=round(characters / len(lengths), 3) if lengths else 0.0,
+            sources=tuple(sorted(sources.items())),
+        )
+
+    def signature(self) -> str:
+        """Return a content digest over every document, in sorted order.
+
+        This is the value recorded as ``corpus_hash`` in provenance: two corpora
+        with identical content hash identically, so a claim's provenance can be
+        checked against the corpus it was grounded in.
+        """
+        return content_hash(
+            [
+                [
+                    document.document_id,
+                    content_hash(
+                        {
+                            "title": document.title,
+                            "text": document.text,
+                            "source": document.source,
+                            "attributes": [list(pair) for pair in document.attributes],
+                        }
+                    ),
+                ]
+                for document in self.documents
+            ]
+        )
+
     def resolve(self, citation: Citation) -> str:
         """Return the exact text a citation points at.
 
@@ -244,3 +285,26 @@ class Corpus:
             for start, end in document.citation_spans(quote):
                 found.append(Citation(document.document_id, start, end, quote))
         return found
+
+
+@dataclass(frozen=True)
+class CorpusStats:
+    """Shape summary of a corpus, used in reports and run metadata."""
+
+    documents: int
+    characters: int
+    shortest: int
+    longest: int
+    mean_length: float
+    sources: tuple[tuple[str, int], ...]
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view with sources as an object."""
+        return {
+            "documents": self.documents,
+            "characters": self.characters,
+            "shortest": self.shortest,
+            "longest": self.longest,
+            "mean_length": self.mean_length,
+            "sources": dict(self.sources),
+        }

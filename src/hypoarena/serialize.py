@@ -37,7 +37,7 @@ from hypoarena.codec import (
 )
 from hypoarena.corpus import Corpus, Document
 from hypoarena.errors import ArtifactError, SchemaError
-from hypoarena.graph import ClaimEdge, HypothesisGraph
+from hypoarena.graph import ClaimEdge, GraphStats, HypothesisGraph
 from hypoarena.schema import (
     SCHEMA_VERSION,
     Citation,
@@ -335,22 +335,75 @@ META_KEYS = ("record", "schema_version", "counts", "signature")
 COUNT_KEYS = ("claims", "evidence", "links", "edges")
 
 
-def graph_meta_line(graph: HypothesisGraph) -> str:
-    """Return the header line carrying counts and the graph signature."""
-    stats = graph.stats()
+def meta_line(counts: Mapping[str, int], signature: str) -> str:
+    """Return the canonical header line shared by every JSONL document type.
+
+    The header carries the schema version, per-record counts and a content
+    signature, which together let a reader detect a truncated or tampered
+    artifact instead of silently rebuilding a partial object.
+    """
     return dumps_line(
         {
             "record": "meta",
             "schema_version": SCHEMA_VERSION,
-            "counts": {
-                "claims": stats.claims,
-                "evidence": stats.evidence,
-                "links": stats.links,
-                "edges": stats.edges,
-            },
-            "signature": graph.signature(),
+            "counts": dict(counts),
+            "signature": signature,
         }
     )
+
+
+def check_document_meta(
+    meta: Mapping[str, Any] | None,
+    *,
+    counts: Mapping[str, int],
+    signature: str,
+    kind: str,
+    count_keys: Sequence[str],
+) -> None:
+    """Verify a header against the records actually read.
+
+    ``kind`` names the document type in error messages; ``count_keys`` fixes
+    which counts the header must carry. A missing header is not an error: JSONL
+    fragments written without one are still readable.
+    """
+    if meta is None:
+        return
+    field = f"{kind}.meta"
+    recorded = require_mapping(meta["counts"], field=f"{field}.counts")
+    reject_unknown_keys(recorded, count_keys, field=f"{field}.counts")
+    expected = {
+        key: require_int(recorded, key, field=f"{field}.counts") for key in count_keys
+    }
+    actual = {key: counts[key] for key in count_keys}
+    if actual != expected:
+        raise SchemaError(
+            f"{kind} document counts disagree with its header",
+            expected=expected,
+            actual=actual,
+        )
+    recorded_signature = require_str(meta, "signature", field=field)
+    if recorded_signature != signature:
+        raise SchemaError(
+            f"{kind} document signature disagrees with its header",
+            recorded=recorded_signature,
+            computed=signature,
+        )
+
+
+def graph_counts(stats: GraphStats) -> dict[str, int]:
+    """Return the counted record types of a graph, keyed by name."""
+    return {
+        "claims": stats.claims,
+        "evidence": stats.evidence,
+        "links": stats.links,
+        "edges": stats.edges,
+    }
+
+
+def graph_meta_line(graph: HypothesisGraph) -> str:
+    """Return the header line carrying counts and the graph signature."""
+    stats = graph.stats()
+    return meta_line(graph_counts(stats), graph.signature())
 
 
 def graph_to_lines(graph: HypothesisGraph, *, include_meta: bool = True) -> list[str]:
@@ -434,32 +487,14 @@ def graph_from_lines(
             edge = edge_from_dict(edge_payload, field=f"graph[{number}]")
             graph.add_edge(edge.source, edge.target, edge.relation, note=edge.note)
     graph.validate()
-    if meta is not None and verify_meta:
-        counts = require_mapping(meta["counts"], field="graph.meta.counts")
-        reject_unknown_keys(counts, COUNT_KEYS, field="graph.meta.counts")
-        stats = graph.stats()
-        actual = {
-            "claims": stats.claims,
-            "evidence": stats.evidence,
-            "links": stats.links,
-            "edges": stats.edges,
-        }
-        expected = {
-            key: require_int(counts, key, field="graph.meta.counts")
-            for key in COUNT_KEYS
-        }
-        if actual != expected:
-            raise SchemaError(
-                "graph document counts disagree with its header",
-                expected=expected,
-                actual=actual,
-            )
-        if require_str(meta, "signature", field="graph.meta") != graph.signature():
-            raise SchemaError(
-                "graph document signature disagrees with its header",
-                recorded=meta["signature"],
-                computed=graph.signature(),
-            )
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts=graph_counts(graph.stats()),
+            signature=graph.signature(),
+            kind="graph",
+            count_keys=COUNT_KEYS,
+        )
     return graph
 
 

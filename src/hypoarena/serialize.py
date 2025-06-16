@@ -14,7 +14,7 @@ can pin. Conventions:
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,7 @@ from hypoarena.codec import (
     require_str,
     require_str_tuple,
 )
+from hypoarena.corpus import Corpus, Document
 from hypoarena.errors import ArtifactError, SchemaError
 from hypoarena.graph import ClaimEdge, HypothesisGraph
 from hypoarena.schema import (
@@ -526,3 +527,86 @@ def write_jsonl_records(records: Iterable[Mapping[str, Any]], path: Path | str) 
         os.fsync(handle.fileno())
     temporary.replace(target)
     return written
+
+
+DOCUMENT_KEYS = ("document_id", "title", "text", "source", "attributes")
+CORPUS_KEYS = ("schema_version", "documents")
+
+
+def pair_list_from_payload(
+    mapping: Mapping[str, Any], key: str, *, field: str
+) -> tuple[tuple[str, str], ...]:
+    """Decode a list of ``[key, value]`` pairs, preserving order."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise SchemaError(
+            f"{field}.{key} must be a list",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    pairs: list[tuple[str, str]] = []
+    for index, item in enumerate(value):
+        item_field = f"{field}.{key}[{index}]"
+        if (
+            isinstance(item, (str, bytes))
+            or not isinstance(item, Sequence)
+            or len(item) != 2
+        ):
+            raise SchemaError(
+                f"{item_field} must be a [key, value] pair", field=item_field, got=item
+            )
+        pairs.append(
+            (
+                require_str({"v": item[0]}, "v", field=item_field),
+                require_str({"v": item[1]}, "v", field=item_field, allow_empty=True),
+            )
+        )
+    return tuple(pairs)
+
+
+def document_to_dict(document: Document) -> dict[str, Any]:
+    """Encode a corpus document."""
+    return {
+        "document_id": document.document_id,
+        "title": document.title,
+        "text": document.text,
+        "source": document.source,
+        "attributes": [[key, value] for key, value in document.attributes],
+    }
+
+
+def document_from_dict(payload: object, *, field: str = "document") -> Document:
+    """Decode a corpus document, rejecting unknown keys."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, DOCUMENT_KEYS, field=field)
+    return Document(
+        document_id=require_str(mapping, "document_id", field=field),
+        title=require_str(mapping, "title", field=field),
+        text=require_str(mapping, "text", field=field),
+        source=require_str(mapping, "source", field=field),
+        attributes=pair_list_from_payload(mapping, "attributes", field=field),
+    )
+
+
+def corpus_to_dict(corpus: Corpus) -> dict[str, Any]:
+    """Encode a whole corpus with its schema version."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "documents": [document_to_dict(document) for document in corpus.documents],
+    }
+
+
+def corpus_from_dict(payload: object, *, field: str = "corpus") -> Corpus:
+    """Decode a corpus, reporting the position of any malformed document."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, CORPUS_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    return Corpus(
+        [
+            document_from_dict(item, field=f"{field}.documents[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "documents", field=field)
+            )
+        ]
+    )

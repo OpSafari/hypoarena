@@ -645,3 +645,78 @@ def corpus_from_dict(payload: object, *, field: str = "corpus") -> Corpus:
             )
         ]
     )
+
+
+CORPUS_RECORD_TYPES = ("meta", "document")
+CORPUS_COUNT_KEYS = ("documents", "characters")
+
+
+def corpus_counts(corpus: Corpus) -> dict[str, int]:
+    """Return the counted properties recorded in a corpus header."""
+    stats = corpus.stats()
+    return {"documents": stats.documents, "characters": stats.characters}
+
+
+def corpus_to_lines(corpus: Corpus, *, include_meta: bool = True) -> list[str]:
+    """Serialize a corpus as ordered JSONL lines (header first)."""
+    lines = (
+        [meta_line(corpus_counts(corpus), corpus.signature())] if include_meta else []
+    )
+    lines.extend(
+        dumps_line({"record": "document", "document": document_to_dict(document)})
+        for document in corpus.documents
+    )
+    return lines
+
+
+def corpus_to_text(corpus: Corpus, *, include_meta: bool = True) -> str:
+    """Return the whole corpus document as one string."""
+    return "".join(corpus_to_lines(corpus, include_meta=include_meta))
+
+
+def corpus_from_lines(lines: Iterable[str], *, verify_meta: bool = True) -> Corpus:
+    """Rebuild a corpus from JSONL lines, checking the header when present."""
+    corpus = Corpus()
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="corpus", line_number=number)
+        record = require_str(payload, "record", field=f"corpus[{number}]")
+        if record not in CORPUS_RECORD_TYPES:
+            raise SchemaError(
+                "unknown corpus record type",
+                field=f"corpus[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(CORPUS_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"corpus[{number}]")
+            check_schema_version(
+                payload, field=f"corpus[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        else:
+            reject_unknown_keys(
+                payload, ("record", "document"), field=f"corpus[{number}]"
+            )
+            corpus.add_document(
+                document_from_dict(
+                    payload["document"], field=f"corpus[{number}].document"
+                )
+            )
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts=corpus_counts(corpus),
+            signature=corpus.signature(),
+            kind="corpus",
+            count_keys=CORPUS_COUNT_KEYS,
+        )
+    return corpus
+
+
+def corpus_from_text(text: str, *, verify_meta: bool = True) -> Corpus:
+    """Rebuild a corpus from a JSONL document string."""
+    return corpus_from_lines(text.splitlines(), verify_meta=verify_meta)

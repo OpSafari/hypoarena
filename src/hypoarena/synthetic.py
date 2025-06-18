@@ -28,6 +28,7 @@ from hypoarena.schema import (
     PredictedRelation,
 )
 from hypoarena.text import (
+    content_tokens,
     normalize,
 )
 
@@ -418,3 +419,41 @@ def plant_chains(config: SyntheticConfig, rng: Random) -> tuple[PlantedChain, ..
             )
         )
     return tuple(chains)
+
+
+def paraphrase_cluster(rng: Random, link: PlantedLink, count: int) -> tuple[str, ...]:
+    """Return ``count`` distinct surface forms of one planted finding.
+
+    Variety comes from the template and verb tables; when those are exhausted a
+    numbered replicate form keeps the cluster size exact, so paraphrase recall
+    measured on the cluster is never limited by the generator running out of
+    surface forms.
+    """
+    if count < 1:
+        raise ValidationError("paraphrase count must be >= 1", count=count)
+    forms: list[str] = []
+    attempts = 0
+    while len(forms) < count and attempts < count * 12:
+        attempts += 1
+        candidate = render_finding(
+            rng, link.subject, link.relation, link.target, link.system
+        )
+        if candidate not in forms:
+            forms.append(candidate)
+    while len(forms) < count:
+        index = len(forms) + 1
+        forms.append(f"Replicate {index} in {link.system}: {link.statement.lower()}.")
+    return tuple(forms)
+
+
+def paraphrase_overlap(first: str, second: str) -> float:
+    """Return the word-level Jaccard overlap of two surface forms.
+
+    Bundled here because the generator is what decides how similar a paraphrase
+    cluster is; dedup measurements quote this value to explain their recall.
+    """
+    left = set(content_tokens(first))
+    right = set(content_tokens(second))
+    if not left and not right:
+        return 1.0
+    return len(left & right) / len(left | right)

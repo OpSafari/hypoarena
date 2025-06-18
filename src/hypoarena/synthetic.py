@@ -457,3 +457,54 @@ def paraphrase_overlap(first: str, second: str) -> float:
     if not left and not right:
         return 1.0
     return len(left & right) / len(left | right)
+
+
+def competing_links(
+    chain: PlantedChain, rng: Random, count: int
+) -> tuple[PlantedLink, ...]:
+    """Return up to ``count`` alternative hypotheses about planted variable pairs.
+
+    A competing link keeps the variable pair and asserts a *different* causal
+    relation, which is what makes it a rival explanation rather than a paraphrase.
+    """
+    if count < 0:
+        raise ValidationError("competitor count must be >= 0", count=count)
+    alternatives: list[PlantedLink] = []
+    for link in chain.links[:count]:
+        options = [item for item in CAUSAL_RELATIONS if item is not link.relation]
+        alternatives.append(
+            PlantedLink(
+                chain_id=chain.chain_id,
+                subject=link.subject,
+                target=link.target,
+                relation=rng.choice(options),
+                system=chain.system,
+                kind="competing",
+            )
+        )
+    return tuple(alternatives)
+
+
+def contradiction_links(
+    chain: PlantedChain, rng: Random, count: int
+) -> tuple[PlantedLink, ...]:
+    """Return up to ``count`` links whose surface text negates a planted one.
+
+    The relation is preserved on purpose: the contradiction lives in the
+    *sentence*, so a grounding verifier that only checks entities and numbers
+    will still see overlap — the polarity check is what has to catch it.
+    """
+    if count < 0:
+        raise ValidationError("contradiction count must be >= 0", count=count)
+    chosen = rng.sample(list(chain.links), min(count, len(chain.links)))
+    return tuple(
+        PlantedLink(
+            chain_id=chain.chain_id,
+            subject=link.subject,
+            target=link.target,
+            relation=link.relation,
+            system=chain.system,
+            kind="contradiction",
+        )
+        for link in sorted(chosen, key=lambda item: (item.subject, item.target))
+    )

@@ -14,10 +14,14 @@ output.
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from random import Random
 
 from hypoarena.errors import (
     ValidationError,
+)
+from hypoarena.ids import (
+    content_hash,
 )
 from hypoarena.schema import (
     PredictedRelation,
@@ -202,3 +206,78 @@ def render_negation(rng: Random, subject: str, target: str, system: str) -> str:
 def canonical_statement(subject: str, relation: PredictedRelation, target: str) -> str:
     """Return the deterministic statement used for planted ground truth."""
     return f"{subject} {canonical_verb(relation)} {target}"
+
+
+MIN_CHAIN_LENGTH = 2
+MAX_CHAIN_LENGTH = 6
+
+
+@dataclass(frozen=True)
+class SyntheticConfig:
+    """Knobs for one synthetic corpus generation.
+
+    Counts are exact, not targets: :meth:`expected_documents` is what
+    :func:`build_corpus` must produce, and a test asserts the equality so a
+    generator change cannot silently shrink a corpus.
+    """
+
+    seed: int = 270106
+    chains: int = 3
+    chain_length: int = 3
+    paraphrases_per_link: int = 2
+    competitors_per_chain: int = 1
+    contradictions_per_chain: int = 1
+    distractor_documents: int = 4
+    filler_sentences: int = 2
+    source_tag: str = "synthetic:v1"
+
+    def __post_init__(self) -> None:
+        if self.chains < 1:
+            raise ValidationError("chains must be >= 1", chains=self.chains)
+        if not MIN_CHAIN_LENGTH <= self.chain_length <= MAX_CHAIN_LENGTH:
+            raise ValidationError(
+                "chain length out of range",
+                chain_length=self.chain_length,
+                minimum=MIN_CHAIN_LENGTH,
+                maximum=MAX_CHAIN_LENGTH,
+            )
+        if self.paraphrases_per_link < 1:
+            raise ValidationError(
+                "paraphrases_per_link must be >= 1",
+                paraphrases_per_link=self.paraphrases_per_link,
+            )
+        for name in (
+            "competitors_per_chain",
+            "contradictions_per_chain",
+            "distractor_documents",
+            "filler_sentences",
+        ):
+            if getattr(self, name) < 0:
+                raise ValidationError(
+                    f"{name} must be >= 0", **{name: getattr(self, name)}
+                )
+        if not self.source_tag.strip():
+            raise ValidationError("source_tag must not be blank")
+
+    def rng(self) -> Random:
+        """Return the seeded generator used for every draw in a build."""
+        return Random(f"hypoarena:synthetic:{self.seed}")
+
+    def links_per_chain(self) -> int:
+        """Number of causal links in one chain."""
+        return self.chain_length - 1
+
+    def expected_documents(self) -> int:
+        """Exact document count a build with this configuration must produce."""
+        planted = self.chains * self.links_per_chain() * self.paraphrases_per_link
+        competing = self.chains * min(
+            self.competitors_per_chain, self.links_per_chain()
+        )
+        contradictions = self.chains * min(
+            self.contradictions_per_chain, self.links_per_chain()
+        )
+        return planted + competing + contradictions + self.distractor_documents
+
+    def fingerprint(self) -> str:
+        """Return a digest of the configuration for run metadata."""
+        return content_hash(asdict(self))

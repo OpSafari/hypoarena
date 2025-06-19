@@ -736,3 +736,89 @@ def build_corpus(seed: int = 270106, **overrides: object) -> Corpus:
     """Convenience wrapper returning just the corpus for a seed."""
     config = SyntheticConfig(seed=seed, **overrides)  # type: ignore[arg-type]
     return generate(config).corpus
+
+
+@dataclass(frozen=True)
+class PlantedCluster:
+    """The documents that restate one planted finding in different words.
+
+    ``document_ids`` is sorted, so :meth:`pairs` enumerates a canonical set of
+    document pairs that dedup measurements can be scored against.
+    """
+
+    link_key: tuple[str, str, str]
+    statement: str
+    document_ids: tuple[str, ...]
+
+    @property
+    def size(self) -> int:
+        """Number of documents in the cluster."""
+        return len(self.document_ids)
+
+    def pairs(self) -> tuple[tuple[str, str], ...]:
+        """All unordered document pairs inside the cluster, sorted."""
+        return tuple(
+            (first, second)
+            for index, first in enumerate(self.document_ids)
+            for second in self.document_ids[index + 1 :]
+        )
+
+
+@dataclass(frozen=True)
+class PlantedTruth:
+    """Ground truth of a generated corpus, used to score recovery."""
+
+    chains: tuple[PlantedChain, ...]
+    competing: tuple[PlantedLink, ...]
+    contradictions: tuple[PlantedLink, ...]
+    clusters: tuple[PlantedCluster, ...]
+    distractor_ids: tuple[str, ...]
+
+    def true_links(self) -> tuple[PlantedLink, ...]:
+        """Every planted link, in chain then position order."""
+        return tuple(link for chain in self.chains for link in chain.links)
+
+    def cluster_for(self, link_key: tuple[str, str, str]) -> PlantedCluster | None:
+        """Return the paraphrase cluster of one link key."""
+        for cluster in self.clusters:
+            if cluster.link_key == link_key:
+                return cluster
+        return None
+
+    def paraphrase_pairs(self) -> int:
+        """Total number of same-finding document pairs a dedup pass should find."""
+        return sum(len(cluster.pairs()) for cluster in self.clusters)
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready summary for reports and artifacts."""
+        return {
+            "chains": len(self.chains),
+            "true_links": len(self.true_links()),
+            "competing": len(self.competing),
+            "contradictions": len(self.contradictions),
+            "clusters": len(self.clusters),
+            "paraphrase_pairs": self.paraphrase_pairs(),
+            "distractors": len(self.distractor_ids),
+        }
+
+
+def truth_of(generated: GeneratedCorpus) -> PlantedTruth:
+    """Derive the ground truth record from a generated corpus."""
+    clusters = tuple(
+        PlantedCluster(
+            link_key=link.key(),
+            statement=link.statement,
+            document_ids=tuple(
+                sorted(finding.document_id for finding in generated.findings_for(link))
+            ),
+        )
+        for chain in generated.chains
+        for link in chain.links
+    )
+    return PlantedTruth(
+        chains=generated.chains,
+        competing=generated.competing,
+        contradictions=generated.contradictions,
+        clusters=clusters,
+        distractor_ids=generated.distractor_ids,
+    )

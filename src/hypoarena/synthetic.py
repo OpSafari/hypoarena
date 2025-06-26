@@ -25,6 +25,9 @@ from hypoarena.corpus import (
 from hypoarena.errors import (
     ValidationError,
 )
+from hypoarena.graph import (
+    HypothesisGraph,
+)
 from hypoarena.ids import (
     content_hash,
     make_id,
@@ -32,6 +35,7 @@ from hypoarena.ids import (
 from hypoarena.schema import (
     Citation,
     Claim,
+    ClaimRelation,
     Evidence,
     EvidencePolarity,
     PredictedRelation,
@@ -912,3 +916,107 @@ def gold_evidence(
             )
         )
     return tuple(items)
+
+
+@dataclass(frozen=True)
+class SyntheticBundle:
+    """A generated corpus together with its ground truth and gold records.
+
+    This is the object examples and tests consume: ``corpus`` is the synthetic
+    literature, ``truth`` the planted structure, and ``claims``/``evidence`` the
+    gold records whose citations resolve against ``corpus`` by construction.
+    """
+
+    config: SyntheticConfig
+    corpus: Corpus
+    truth: PlantedTruth
+    claims: tuple[Claim, ...]
+    evidence: tuple[Evidence, ...]
+    findings: tuple[PlacedFinding, ...]
+
+    @property
+    def corpus_hash(self) -> str:
+        """Content digest of the corpus, as recorded in every provenance."""
+        return self.corpus.signature()
+
+    def claim_for(self, link: PlantedLink) -> Claim | None:
+        """Return the gold claim stating one planted link, if it exists."""
+        wanted = link.key()
+        for claim in self.claims:
+            if (
+                normalize(claim.subject),
+                claim.relation.value,
+                normalize(claim.object),
+            ) == wanted:
+                return claim
+        return None
+
+    def summary(self) -> dict[str, int]:
+        """Return the counts a report or CLI line needs."""
+        return {
+            "documents": len(self.corpus),
+            "claims": len(self.claims),
+            "evidence": len(self.evidence),
+            "planted_links": len(self.truth.true_links()),
+            "competing": len(self.truth.competing),
+            "contradictions": len(self.truth.contradictions),
+            "paraphrase_pairs": self.truth.paraphrase_pairs(),
+            "distractors": len(self.truth.distractor_ids),
+        }
+
+    def graph(self) -> HypothesisGraph:
+        """Build a hypothesis graph wiring gold records to their evidence.
+
+        Evidence is attached to the claim its finding states (a negated finding
+        attaches to the planted claim it denies), and each rival hypothesis is
+        joined to its planted counterpart with a ``contradicts`` edge.
+        """
+        result = HypothesisGraph()
+        claim_by_key: dict[tuple[str, str, str], str] = {}
+        planted_by_pair: dict[tuple[str, str], str] = {}
+        for claim in self.claims:
+            result.add_claim(claim)
+            key = (
+                normalize(claim.subject),
+                claim.relation.value,
+                normalize(claim.object),
+            )
+            claim_by_key[key] = claim.claim_id
+            if claim.provenance.notes == "planted":
+                planted_by_pair[(key[0], key[2])] = claim.claim_id
+        for item, finding in zip(self.evidence, self.findings, strict=True):
+            result.add_evidence(item)
+            claim_id = claim_by_key.get(finding.link.key())
+            if claim_id is not None:
+                result.link_evidence(claim_id, item.evidence_id)
+        for rival in self.truth.competing:
+            pair = (normalize(rival.subject), normalize(rival.target))
+            planted_id = planted_by_pair.get(pair)
+            rival_id = claim_by_key.get(rival.key())
+            if planted_id is not None and rival_id is not None:
+                result.add_edge(
+                    planted_id,
+                    rival_id,
+                    ClaimRelation.CONTRADICTS,
+                    note="planted rival",
+                )
+        result.validate()
+        return result
+
+
+def build_bundle(
+    config: SyntheticConfig | None = None, **overrides: object
+) -> SyntheticBundle:
+    """Generate a bundle from a configuration (or a seed plus overrides)."""
+    resolved = config or SyntheticConfig(**overrides)  # type: ignore[arg-type]
+    generated = generate(resolved)
+    digest = generated.corpus.signature()
+    truth = truth_of(generated)
+    return SyntheticBundle(
+        config=resolved,
+        corpus=generated.corpus,
+        truth=truth,
+        claims=gold_claims(generated, corpus_hash=digest),
+        evidence=gold_evidence(generated, corpus_hash=digest),
+        findings=generated.findings,
+    )

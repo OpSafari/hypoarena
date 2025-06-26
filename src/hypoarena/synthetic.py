@@ -230,6 +230,7 @@ def canonical_statement(subject: str, relation: PredictedRelation, target: str) 
 
 MIN_CHAIN_LENGTH = 2
 MAX_CHAIN_LENGTH = 6
+MAX_PLANTING_ATTEMPTS = 24
 
 
 @dataclass(frozen=True)
@@ -414,20 +415,35 @@ def draw_variables(rng: Random, count: int) -> tuple[str, ...]:
 def plant_chains(config: SyntheticConfig, rng: Random) -> tuple[PlantedChain, ...]:
     """Plant ``config.chains`` causal chains with randomly chosen directions."""
     chains: list[PlantedChain] = []
+    used_keys: set[tuple[str, str, str]] = set()
     for index in range(config.chains):
         chain_id = make_id("chn", config.seed, "chain", index)
         system = rng.choice(MODEL_SYSTEMS)
-        variables = draw_variables(rng, config.chain_length)
-        links = tuple(
-            PlantedLink(
-                chain_id=chain_id,
-                subject=variables[position],
-                target=variables[position + 1],
-                relation=rng.choice(CAUSAL_RELATIONS),
-                system=system,
+        variables: tuple[str, ...] = ()
+        links: tuple[PlantedLink, ...] = ()
+        for _attempt in range(MAX_PLANTING_ATTEMPTS):
+            variables = draw_variables(rng, config.chain_length)
+            candidate = tuple(
+                PlantedLink(
+                    chain_id=chain_id,
+                    subject=variables[position],
+                    target=variables[position + 1],
+                    relation=rng.choice(CAUSAL_RELATIONS),
+                    system=system,
+                )
+                for position in range(len(variables) - 1)
             )
-            for position in range(len(variables) - 1)
-        )
+            if not (set(item.key() for item in candidate) & used_keys):
+                links = candidate
+                break
+        if not links:
+            raise ValidationError(
+                "vocabulary exhausted while planting distinct links",
+                chains=config.chains,
+                chain_length=config.chain_length,
+                attempts=MAX_PLANTING_ATTEMPTS,
+            )
+        used_keys.update(item.key() for item in links)
         chains.append(
             PlantedChain(
                 chain_id=chain_id, variables=variables, system=system, links=links
@@ -475,7 +491,10 @@ def paraphrase_overlap(first: str, second: str) -> float:
 
 
 def competing_links(
-    chain: PlantedChain, rng: Random, count: int
+    chain: PlantedChain,
+    rng: Random,
+    count: int,
+    taken: set[tuple[str, str, str]] | None = None,
 ) -> tuple[PlantedLink, ...]:
     """Return up to ``count`` alternative hypotheses about planted variable pairs.
 
@@ -487,16 +506,23 @@ def competing_links(
     alternatives: list[PlantedLink] = []
     for link in chain.links[:count]:
         options = [item for item in CAUSAL_RELATIONS if item is not link.relation]
-        alternatives.append(
-            PlantedLink(
-                chain_id=chain.chain_id,
-                subject=link.subject,
-                target=link.target,
-                relation=rng.choice(options),
-                system=chain.system,
-                kind="competing",
-            )
+        if taken is not None:
+            fresh = [
+                item
+                for item in options
+                if (normalize(link.subject), item.value, normalize(link.target))
+                not in taken
+            ]
+            options = fresh or options
+        rival = PlantedLink(
+            chain_id=chain.chain_id,
+            subject=link.subject,
+            target=link.target,
+            relation=rng.choice(options),
+            system=chain.system,
+            kind="competing",
         )
+        alternatives.append(rival)
     return tuple(alternatives)
 
 
@@ -697,6 +723,9 @@ def generate(config: SyntheticConfig) -> GeneratedCorpus:
     documents: list[Document] = []
     competing: list[PlantedLink] = []
     contradictions: list[PlantedLink] = []
+    taken_keys: set[tuple[str, str, str]] = {
+        link.key() for chain in chains for link in chain.links
+    }
 
     def place(
         link: PlantedLink, forms: Sequence[str], chain_index: int, slot: int
@@ -709,7 +738,8 @@ def generate(config: SyntheticConfig) -> GeneratedCorpus:
         for link_index, link in enumerate(chain.links):
             forms = paraphrase_cluster(rng, link, config.paraphrases_per_link)
             place(link, forms, chain_index, link_index)
-        rivals = competing_links(chain, rng, config.competitors_per_chain)
+        rivals = competing_links(chain, rng, config.competitors_per_chain, taken_keys)
+        taken_keys.update(rival.key() for rival in rivals)
         competing.extend(rivals)
         for rival_index, rival in enumerate(rivals):
             place(

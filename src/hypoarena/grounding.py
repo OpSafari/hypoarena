@@ -1,0 +1,66 @@
+"""Span-level grounding verification for claims.
+
+A claim is grounded when the corpus text it cites actually says what the claim
+says. The checks here are deliberately mechanical and documented: span
+resolution, entity overlap, polarity cues and numeric agreement. They catch
+fabricated citations, drifted numbers and negation flips; they cannot judge
+whether a claim is scientifically true, and the graded flags make that limit
+explicit instead of hiding it behind a boolean.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum, unique
+
+
+@unique
+class GroundingFlag(StrEnum):
+    """Graded outcome of verifying one claim against a corpus."""
+
+    GROUNDED = "grounded"
+    WEAK = "weakly_grounded"
+    UNGROUNDED = "ungrounded"
+    FABRICATED = "fabricated"
+
+
+@unique
+class GroundingIssue(StrEnum):
+    """Individual problems found while checking a claim or citation."""
+
+    NO_CITATIONS = "no_citations"
+    MISSING_DOCUMENT = "missing_document"
+    SPAN_OUT_OF_RANGE = "span_out_of_range"
+    QUOTE_MISMATCH = "quote_mismatch"
+    SHORT_QUOTE = "short_quote"
+    LOW_ENTITY_OVERLAP = "low_entity_overlap"
+    POLARITY_CONFLICT = "polarity_conflict"
+    NUMERIC_MISMATCH = "numeric_mismatch"
+
+
+#: Issues that mean the citation does not point at the text it claims to quote.
+FABRICATING_ISSUES: frozenset[GroundingIssue] = frozenset(
+    {
+        GroundingIssue.MISSING_DOCUMENT,
+        GroundingIssue.SPAN_OUT_OF_RANGE,
+        GroundingIssue.QUOTE_MISMATCH,
+    }
+)
+#: Issues that weaken but do not invalidate a citation.
+SOFT_ISSUES: frozenset[GroundingIssue] = frozenset(
+    {
+        GroundingIssue.SHORT_QUOTE,
+        GroundingIssue.LOW_ENTITY_OVERLAP,
+        GroundingIssue.POLARITY_CONFLICT,
+        GroundingIssue.NUMERIC_MISMATCH,
+    }
+)
+
+
+def is_fabricating(issue: GroundingIssue) -> bool:
+    """True when an issue means the quoted text is not where the claim says."""
+    return issue in FABRICATING_ISSUES
+
+
+def is_soft(issue: GroundingIssue) -> bool:
+    """True when an issue downgrades a citation without invalidating it."""
+    return issue in SOFT_ISSUES

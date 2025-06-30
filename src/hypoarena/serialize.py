@@ -38,6 +38,7 @@ from hypoarena.codec import (
 from hypoarena.corpus import Corpus, Document
 from hypoarena.errors import ArtifactError, SchemaError
 from hypoarena.graph import ClaimEdge, GraphStats, HypothesisGraph
+from hypoarena.ids import content_hash
 from hypoarena.schema import (
     SCHEMA_VERSION,
     Citation,
@@ -48,6 +49,12 @@ from hypoarena.schema import (
     PredictedRelation,
     Provenance,
     Scope,
+)
+from hypoarena.synthetic import (
+    PlantedChain,
+    PlantedCluster,
+    PlantedLink,
+    PlantedTruth,
 )
 
 SCOPE_KEYS = ("population", "conditions")
@@ -755,3 +762,265 @@ def write_lines(lines: Iterable[str], path: Path | str) -> int:
         os.fsync(handle.fileno())
     temporary.replace(target)
     return written
+
+
+PLANTED_LINK_KEYS = (
+    "chain_id",
+    "subject",
+    "target",
+    "relation",
+    "system",
+    "kind",
+)
+CHAIN_KEYS = ("chain_id", "variables", "system", "links")
+CLUSTER_KEYS = ("link_key", "statement", "document_ids")
+TRUTH_KEYS = (
+    "schema_version",
+    "chains",
+    "competing",
+    "contradictions",
+    "clusters",
+    "distractor_ids",
+)
+TRUTH_RECORD_TYPES = (
+    "meta",
+    "chain",
+    "competing",
+    "contradiction",
+    "cluster",
+    "distractors",
+)
+DISTRACTOR_RECORD_KEYS = ("record", "document_ids")
+TRUTH_COUNT_KEYS = ("chains", "competing", "contradictions", "clusters")
+
+
+def link_to_dict(link: PlantedLink) -> dict[str, Any]:
+    """Encode one planted link."""
+    return {
+        "chain_id": link.chain_id,
+        "subject": link.subject,
+        "target": link.target,
+        "relation": link.relation.value,
+        "system": link.system,
+        "kind": link.kind,
+    }
+
+
+def link_from_dict(payload: object, *, field: str = "link") -> PlantedLink:
+    """Decode one planted link."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, PLANTED_LINK_KEYS, field=field)
+    return PlantedLink(
+        chain_id=require_str(mapping, "chain_id", field=field),
+        subject=require_str(mapping, "subject", field=field),
+        target=require_str(mapping, "target", field=field),
+        relation=require_enum(mapping, "relation", PredictedRelation, field=field),
+        system=require_str(mapping, "system", field=field),
+        kind=require_str(mapping, "kind", field=field),
+    )
+
+
+def chain_to_dict(chain: PlantedChain) -> dict[str, Any]:
+    """Encode a planted chain with its links."""
+    return {
+        "chain_id": chain.chain_id,
+        "variables": list(chain.variables),
+        "system": chain.system,
+        "links": [link_to_dict(link) for link in chain.links],
+    }
+
+
+def chain_from_dict(payload: object, *, field: str = "chain") -> PlantedChain:
+    """Decode a planted chain."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, CHAIN_KEYS, field=field)
+    return PlantedChain(
+        chain_id=require_str(mapping, "chain_id", field=field),
+        variables=require_str_tuple(mapping, "variables", field=field, minimum_items=2),
+        system=require_str(mapping, "system", field=field),
+        links=tuple(
+            link_from_dict(item, field=f"{field}.links[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "links", field=field)
+            )
+        ),
+    )
+
+
+def cluster_to_dict(cluster: PlantedCluster) -> dict[str, Any]:
+    """Encode a paraphrase cluster."""
+    return {
+        "link_key": list(cluster.link_key),
+        "statement": cluster.statement,
+        "document_ids": list(cluster.document_ids),
+    }
+
+
+def cluster_from_dict(payload: object, *, field: str = "cluster") -> PlantedCluster:
+    """Decode a paraphrase cluster."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, CLUSTER_KEYS, field=field)
+    key = require_str_tuple(mapping, "link_key", field=field)
+    if len(key) != 3:
+        raise SchemaError(
+            f"{field}.link_key must have three parts", field=field, count=len(key)
+        )
+    return PlantedCluster(
+        link_key=(key[0], key[1], key[2]),
+        statement=require_str(mapping, "statement", field=field),
+        document_ids=require_str_tuple(mapping, "document_ids", field=field),
+    )
+
+
+def truth_to_dict(truth: PlantedTruth) -> dict[str, Any]:
+    """Encode planted ground truth as a single JSON object."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "chains": [chain_to_dict(chain) for chain in truth.chains],
+        "competing": [link_to_dict(link) for link in truth.competing],
+        "contradictions": [link_to_dict(link) for link in truth.contradictions],
+        "clusters": [cluster_to_dict(cluster) for cluster in truth.clusters],
+        "distractor_ids": list(truth.distractor_ids),
+    }
+
+
+def truth_from_dict(payload: object, *, field: str = "truth") -> PlantedTruth:
+    """Decode planted ground truth."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, TRUTH_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    return PlantedTruth(
+        chains=tuple(
+            chain_from_dict(item, field=f"{field}.chains[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "chains", field=field)
+            )
+        ),
+        competing=tuple(
+            link_from_dict(item, field=f"{field}.competing[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "competing", field=field)
+            )
+        ),
+        contradictions=tuple(
+            link_from_dict(item, field=f"{field}.contradictions[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "contradictions", field=field)
+            )
+        ),
+        clusters=tuple(
+            cluster_from_dict(item, field=f"{field}.clusters[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "clusters", field=field)
+            )
+        ),
+        distractor_ids=require_str_tuple(mapping, "distractor_ids", field=field),
+    )
+
+
+def truth_signature(truth: PlantedTruth) -> str:
+    """Return a digest over the encoded ground truth."""
+    return content_hash(truth_to_dict(truth))
+
+
+def truth_counts(truth: PlantedTruth) -> dict[str, int]:
+    """Return the record counts stored in a truth document header."""
+    return {
+        "chains": len(truth.chains),
+        "competing": len(truth.competing),
+        "contradictions": len(truth.contradictions),
+        "clusters": len(truth.clusters),
+    }
+
+
+def truth_to_lines(truth: PlantedTruth, *, include_meta: bool = True) -> list[str]:
+    """Serialize planted truth as ordered JSONL lines."""
+    lines = (
+        [meta_line(truth_counts(truth), truth_signature(truth))] if include_meta else []
+    )
+    lines.extend(
+        dumps_line({"record": "chain", "chain": chain_to_dict(chain)})
+        for chain in truth.chains
+    )
+    lines.extend(
+        dumps_line({"record": "competing", "link": link_to_dict(link)})
+        for link in truth.competing
+    )
+    lines.extend(
+        dumps_line({"record": "contradiction", "link": link_to_dict(link)})
+        for link in truth.contradictions
+    )
+    lines.extend(
+        dumps_line({"record": "cluster", "cluster": cluster_to_dict(cluster)})
+        for cluster in truth.clusters
+    )
+    lines.append(
+        dumps_line(
+            {"record": "distractors", "document_ids": list(truth.distractor_ids)}
+        )
+    )
+    return lines
+
+
+def truth_from_lines(lines: Iterable[str], *, verify_meta: bool = True) -> PlantedTruth:
+    """Rebuild planted truth from JSONL lines, checking the header by default."""
+    chains: list[PlantedChain] = []
+    competing: list[PlantedLink] = []
+    contradictions: list[PlantedLink] = []
+    clusters: list[PlantedCluster] = []
+    distractor_ids: tuple[str, ...] = ()
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="truth", line_number=number)
+        record = require_str(payload, "record", field=f"truth[{number}]")
+        if record not in TRUTH_RECORD_TYPES:
+            raise SchemaError(
+                "unknown truth record type",
+                field=f"truth[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(TRUTH_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"truth[{number}]")
+            check_schema_version(
+                payload, field=f"truth[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        elif record == "chain":
+            chains.append(chain_from_dict(payload["chain"], field=f"truth[{number}]"))
+        elif record == "cluster":
+            clusters.append(
+                cluster_from_dict(payload["cluster"], field=f"truth[{number}]")
+            )
+        elif record == "distractors":
+            reject_unknown_keys(
+                payload, DISTRACTOR_RECORD_KEYS, field=f"truth[{number}]"
+            )
+            distractor_ids = require_str_tuple(
+                payload, "document_ids", field=f"truth[{number}]"
+            )
+        else:
+            link = link_from_dict(payload["link"], field=f"truth[{number}]")
+            if record == "competing":
+                competing.append(link)
+            else:
+                contradictions.append(link)
+    truth = PlantedTruth(
+        chains=tuple(chains),
+        competing=tuple(competing),
+        contradictions=tuple(contradictions),
+        clusters=tuple(clusters),
+        distractor_ids=distractor_ids,
+    )
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts=truth_counts(truth),
+            signature=truth_signature(truth),
+            kind="truth",
+            count_keys=TRUTH_COUNT_KEYS,
+        )
+    return truth

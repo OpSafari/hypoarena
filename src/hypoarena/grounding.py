@@ -23,6 +23,7 @@ from hypoarena.schema import (
 from hypoarena.text import (
     content_tokens,
     jaccard,
+    negation_flip,
 )
 
 
@@ -151,3 +152,16 @@ def check_span(
             f"document says {found!r}, claim quotes {citation.quote!r}",
         )
     return True, (), None
+
+
+def check_polarity(claim: Claim, quote: str) -> tuple[GroundingIssue, ...]:
+    """Flag a negation cue that appears on one side only.
+
+    The check is symmetric on purpose: a claim asserting an effect against a
+    quote that denies it, and a negated claim citing a positive finding, are both
+    polarity conflicts. It is a cue-level heuristic — it detects *that* a
+    statement is negated, not which part of it is.
+    """
+    if negation_flip(claim.statement, quote):
+        return (GroundingIssue.POLARITY_CONFLICT,)
+    return ()

@@ -328,3 +328,16 @@ def has_negation(tokens: Sequence[str]) -> bool:
 def negation_flip(first: str, second: str) -> bool:
     """True when exactly one of the two statements carries a negation cue."""
     return has_negation(tokenize(first)) != has_negation(tokenize(second))
+
+
+def jaccard(left: set[str], right: set[str]) -> float:
+    """Return the Jaccard index of two token sets.
+
+    Two empty sets score ``1.0`` so that comparing two content-free strings does
+    not produce a division by zero; callers that need "no content" to score low
+    should check for emptiness themselves.
+    """
+    if not left and not right:
+        return 1.0
+    union = left | right
+    return len(left & right) / len(union)

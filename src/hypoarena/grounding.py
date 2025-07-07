@@ -13,6 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum, unique
 
+from hypoarena.corpus import (
+    Corpus,
+)
 from hypoarena.schema import (
     Citation,
     Claim,
@@ -115,3 +118,36 @@ def entity_overlap(claim: Claim, quote: str) -> float:
     repeats them plus a verb, and including it would reward verbose claims.
     """
     return jaccard(claim_terms(claim), set(content_tokens(quote)))
+
+
+def check_span(
+    corpus: Corpus, citation: Citation
+) -> tuple[bool, tuple[GroundingIssue, ...], str | None]:
+    """Resolve one citation against the corpus.
+
+    Returns ``(resolved, issues, detail)``. The three failure modes are kept
+    apart because they mean different things: a missing document is a broken
+    reference, out-of-range offsets are a stale span, and a quote mismatch is the
+    fabricated-citation case the verifier must never let through.
+    """
+    if not corpus.has_document(citation.document_id):
+        return (
+            False,
+            (GroundingIssue.MISSING_DOCUMENT,),
+            f"corpus has no document {citation.document_id}",
+        )
+    document = corpus.document(citation.document_id)
+    if citation.start < 0 or citation.end > document.length:
+        return (
+            False,
+            (GroundingIssue.SPAN_OUT_OF_RANGE,),
+            f"offsets {citation.start}..{citation.end} outside 0..{document.length}",
+        )
+    found = document.text[citation.start : citation.end]
+    if found != citation.quote:
+        return (
+            False,
+            (GroundingIssue.QUOTE_MISMATCH,),
+            f"document says {found!r}, claim quotes {citation.quote!r}",
+        )
+    return True, (), None

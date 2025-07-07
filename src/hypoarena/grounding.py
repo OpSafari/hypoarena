@@ -242,3 +242,46 @@ class VerifierConfig:
     def fingerprint(self) -> str:
         """Return a digest of the configuration for run metadata."""
         return content_hash(asdict(self))
+
+
+class GroundingVerifier:
+    """Checks claims against a corpus with documented, tunable heuristics."""
+
+    def __init__(self, corpus: Corpus, config: VerifierConfig | None = None) -> None:
+        self.corpus = corpus
+        self.config = config or VerifierConfig()
+
+    def check_citation(self, claim: Claim, citation: Citation) -> CitationCheck:
+        """Run every applicable check on one citation of one claim.
+
+        Soft checks (length, entity overlap, polarity, numbers) only run when the
+        span resolved: scoring a quote that is not in the document would be
+        meaningless.
+        """
+        resolved, issues, detail = check_span(self.corpus, citation)
+        extra: list[GroundingIssue] = []
+        overlap = 0.0
+        quoted: tuple[float, ...] = ()
+        if resolved:
+            quote = citation.quote
+            if len(quote.strip()) < self.config.min_quote_length:
+                extra.append(GroundingIssue.SHORT_QUOTE)
+            overlap = entity_overlap(claim, quote)
+            if overlap < self.config.min_entity_overlap:
+                extra.append(GroundingIssue.LOW_ENTITY_OVERLAP)
+            quoted = tuple(extract_numbers(quote))
+            if self.config.polarity_checks:
+                extra.extend(check_polarity(claim, quote))
+            if self.config.numeric_checks:
+                extra.extend(
+                    check_numbers(claim, quote, tolerance=self.config.numeric_tolerance)
+                )
+        return CitationCheck(
+            citation=citation,
+            resolved=resolved,
+            issues=(*issues, *extra),
+            entity_overlap=round(overlap, 4),
+            claimed_numbers=claimed_numbers(claim),
+            quoted_numbers=quoted,
+            detail=detail,
+        )

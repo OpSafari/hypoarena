@@ -10,11 +10,17 @@ explicit instead of hiding it behind a boolean.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum, unique
 
 from hypoarena.corpus import (
     Corpus,
+)
+from hypoarena.errors import (
+    ValidationError,
+)
+from hypoarena.ids import (
+    content_hash,
 )
 from hypoarena.schema import (
     Citation,
@@ -193,3 +199,46 @@ def check_numbers(
         if not any(abs(value - item) <= tolerance for item in quoted)
     ]
     return (GroundingIssue.NUMERIC_MISMATCH,) if missing else ()
+
+
+DEFAULT_MIN_ENTITY_OVERLAP = 0.34
+DEFAULT_MIN_QUOTE_LENGTH = 12
+DEFAULT_NUMERIC_TOLERANCE = 1e-9
+
+
+@dataclass(frozen=True)
+class VerifierConfig:
+    """Thresholds for one grounding verification pass.
+
+    ``min_entity_overlap`` is the Jaccard score a quote must reach against the
+    claim's variables; ``min_quote_length`` rejects citations so short that any
+    overlap is accidental. Both checks only ever downgrade a citation to
+    ``weakly_grounded`` — they never turn a resolvable citation into a
+    fabricated one.
+    """
+
+    min_entity_overlap: float = DEFAULT_MIN_ENTITY_OVERLAP
+    min_quote_length: int = DEFAULT_MIN_QUOTE_LENGTH
+    numeric_tolerance: float = DEFAULT_NUMERIC_TOLERANCE
+    polarity_checks: bool = True
+    numeric_checks: bool = True
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.min_entity_overlap <= 1.0:
+            raise ValidationError(
+                "min_entity_overlap must lie within [0, 1]",
+                min_entity_overlap=self.min_entity_overlap,
+            )
+        if self.min_quote_length < 1:
+            raise ValidationError(
+                "min_quote_length must be >= 1", min_quote_length=self.min_quote_length
+            )
+        if self.numeric_tolerance < 0.0:
+            raise ValidationError(
+                "numeric_tolerance must be >= 0",
+                numeric_tolerance=self.numeric_tolerance,
+            )
+
+    def fingerprint(self) -> str:
+        """Return a digest of the configuration for run metadata."""
+        return content_hash(asdict(self))

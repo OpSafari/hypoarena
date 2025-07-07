@@ -10,6 +10,7 @@ explicit instead of hiding it behind a boolean.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from enum import StrEnum, unique
 
@@ -285,3 +286,106 @@ class GroundingVerifier:
             quoted_numbers=quoted,
             detail=detail,
         )
+
+    def verify(self, claim: Claim) -> GroundingReport:
+        """Verify every citation of one claim and grade the result.
+
+        Grading rules, in order: an uncited claim is ``ungrounded``; a claim with
+        any citation that does not resolve is ``fabricated``; a claim whose
+        citations resolve but carry soft issues is ``weakly_grounded``;
+        otherwise it is ``grounded``.
+        """
+        if not claim.citations:
+            return GroundingReport(
+                claim_id=claim.claim_id,
+                statement=claim.statement,
+                flag=GroundingFlag.UNGROUNDED,
+                score=0.0,
+                checks=(),
+                issues=(GroundingIssue.NO_CITATIONS,),
+            )
+        checks = tuple(
+            self.check_citation(claim, citation) for citation in claim.citations
+        )
+        issues = sort_issues(issue for check in checks for issue in check.issues)
+        if any(check.is_fabricated for check in checks):
+            flag = GroundingFlag.FABRICATED
+        elif issues:
+            flag = GroundingFlag.WEAK
+        else:
+            flag = GroundingFlag.GROUNDED
+        score = round(sum(citation_score(check) for check in checks) / len(checks), 4)
+        return GroundingReport(
+            claim_id=claim.claim_id,
+            statement=claim.statement,
+            flag=flag,
+            score=score,
+            checks=checks,
+            issues=issues,
+        )
+
+
+ISSUE_SEVERITY: tuple[GroundingIssue, ...] = (
+    GroundingIssue.NO_CITATIONS,
+    GroundingIssue.MISSING_DOCUMENT,
+    GroundingIssue.SPAN_OUT_OF_RANGE,
+    GroundingIssue.QUOTE_MISMATCH,
+    GroundingIssue.POLARITY_CONFLICT,
+    GroundingIssue.NUMERIC_MISMATCH,
+    GroundingIssue.LOW_ENTITY_OVERLAP,
+    GroundingIssue.SHORT_QUOTE,
+)
+CLEAN_SCORE = 1.0
+WEAK_SCORE = 0.5
+FAILED_SCORE = 0.0
+
+
+def citation_score(check: CitationCheck) -> float:
+    """Score one citation: clean, resolvable-but-weak, or unresolvable."""
+    if not check.resolved:
+        return FAILED_SCORE
+    return CLEAN_SCORE if check.is_clean else WEAK_SCORE
+
+
+def sort_issues(issues: Iterable[GroundingIssue]) -> tuple[GroundingIssue, ...]:
+    """Return unique issues ordered from most to least severe."""
+    return tuple(sorted(set(issues), key=lambda issue: ISSUE_SEVERITY.index(issue)))
+
+
+@dataclass(frozen=True)
+class GroundingReport:
+    """The graded result of verifying one claim."""
+
+    claim_id: str
+    statement: str
+    flag: GroundingFlag
+    score: float
+    checks: tuple[CitationCheck, ...]
+    issues: tuple[GroundingIssue, ...]
+
+    @property
+    def is_grounded(self) -> bool:
+        """True only for claims whose citations all check out cleanly."""
+        return self.flag is GroundingFlag.GROUNDED
+
+    @property
+    def is_fabricated(self) -> bool:
+        """True when at least one citation does not point at its quoted text."""
+        return self.flag is GroundingFlag.FABRICATED
+
+    @property
+    def worst_issue(self) -> GroundingIssue | None:
+        """The most severe issue found, or ``None`` for a clean claim."""
+        return self.issues[0] if self.issues else None
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view used by reports and artifacts."""
+        return {
+            "claim_id": self.claim_id,
+            "statement": self.statement,
+            "flag": self.flag.value,
+            "score": self.score,
+            "issues": [issue.value for issue in self.issues],
+            "citations": len(self.checks),
+            "resolved": sum(1 for check in self.checks if check.resolved),
+        }

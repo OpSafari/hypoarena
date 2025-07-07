@@ -22,6 +22,7 @@ from hypoarena.schema import (
 )
 from hypoarena.text import (
     content_tokens,
+    extract_numbers,
     jaccard,
     negation_flip,
 )
@@ -165,3 +166,30 @@ def check_polarity(claim: Claim, quote: str) -> tuple[GroundingIssue, ...]:
     if negation_flip(claim.statement, quote):
         return (GroundingIssue.POLARITY_CONFLICT,)
     return ()
+
+
+def claimed_numbers(claim: Claim) -> tuple[float, ...]:
+    """Return every number the claim asserts, in statement order."""
+    return tuple(extract_numbers(f"{claim.statement} {claim.subject} {claim.object}"))
+
+
+def check_numbers(
+    claim: Claim, quote: str, *, tolerance: float = 0.0
+) -> tuple[GroundingIssue, ...]:
+    """Require every number the claim asserts to appear in the quoted text.
+
+    Only magnitudes are compared (see :func:`hypoarena.text.extract_numbers` for
+    the documented limits: units are ignored, dotted versions split). A claim
+    without numbers passes vacuously; a claim with numbers the quote does not
+    contain is flagged, which is what catches a drifted effect size.
+    """
+    claimed = claimed_numbers(claim)
+    if not claimed:
+        return ()
+    quoted = extract_numbers(quote)
+    missing = [
+        value
+        for value in claimed
+        if not any(abs(value - item) <= tolerance for item in quoted)
+    ]
+    return (GroundingIssue.NUMERIC_MISMATCH,) if missing else ()

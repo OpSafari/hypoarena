@@ -358,3 +358,43 @@ def require_mapping_list(
         require_mapping(item, field=f"{field}.{key}[{index}]")
         for index, item in enumerate(value)
     ]
+
+
+def require_float_list(
+    mapping: Mapping[str, Any], key: str, *, field: str
+) -> tuple[float, ...]:
+    """Read ``key`` as a list of finite numbers."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise SchemaError(
+            f"{field}.{key} must be a list",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    return tuple(
+        require_float({"v": item}, "v", field=f"{field}.{key}[{index}]")
+        for index, item in enumerate(value)
+    )
+
+
+def require_enum_list(
+    mapping: Mapping[str, Any],
+    key: str,
+    enum_type: type[EnumT],
+    *,
+    field: str,
+) -> tuple[EnumT, ...]:
+    """Read ``key`` as a list of enum values."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise SchemaError(
+            f"{field}.{key} must be a list",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    return tuple(
+        require_enum({"v": item}, "v", enum_type, field=f"{field}.{key}[{index}]")
+        for index, item in enumerate(value)
+    )

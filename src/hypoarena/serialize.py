@@ -27,8 +27,11 @@ from hypoarena.codec import (
     optional_str,
     present_value,
     reject_unknown_keys,
+    require_bool,
     require_enum,
+    require_enum_list,
     require_float,
+    require_float_list,
     require_int,
     require_mapping,
     require_mapping_list,
@@ -38,6 +41,13 @@ from hypoarena.codec import (
 from hypoarena.corpus import Corpus, Document
 from hypoarena.errors import ArtifactError, SchemaError
 from hypoarena.graph import ClaimEdge, GraphStats, HypothesisGraph
+from hypoarena.grounding import (
+    CitationCheck,
+    GroundingFlag,
+    GroundingIssue,
+    GroundingReport,
+    summarize_reports,
+)
 from hypoarena.ids import content_hash
 from hypoarena.schema import (
     SCHEMA_VERSION,
@@ -1024,3 +1034,183 @@ def truth_from_lines(lines: Iterable[str], *, verify_meta: bool = True) -> Plant
             count_keys=TRUTH_COUNT_KEYS,
         )
     return truth
+
+
+CITATION_CHECK_KEYS = (
+    "document_id",
+    "start",
+    "end",
+    "quote",
+    "resolved",
+    "issues",
+    "entity_overlap",
+    "claimed_numbers",
+    "quoted_numbers",
+    "detail",
+)
+GROUNDING_REPORT_KEYS = (
+    "schema_version",
+    "claim_id",
+    "statement",
+    "flag",
+    "score",
+    "issues",
+    "checks",
+)
+GROUNDING_RECORD_TYPES = ("meta", "report")
+GROUNDING_COUNT_KEYS = (
+    "reports",
+    "grounded",
+    "weakly_grounded",
+    "ungrounded",
+    "fabricated",
+)
+
+
+def citation_check_to_dict(check: CitationCheck) -> dict[str, Any]:
+    """Encode one citation check, flattening the citation into the payload."""
+    return {
+        "document_id": check.citation.document_id,
+        "start": check.citation.start,
+        "end": check.citation.end,
+        "quote": check.citation.quote,
+        "resolved": check.resolved,
+        "issues": [issue.value for issue in check.issues],
+        "entity_overlap": check.entity_overlap,
+        "claimed_numbers": list(check.claimed_numbers),
+        "quoted_numbers": list(check.quoted_numbers),
+        "detail": check.detail,
+    }
+
+
+def citation_check_from_dict(payload: object, *, field: str = "check") -> CitationCheck:
+    """Decode one citation check."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, CITATION_CHECK_KEYS, field=field)
+    return CitationCheck(
+        citation=Citation(
+            require_str(mapping, "document_id", field=field),
+            require_int(mapping, "start", field=field, minimum=0),
+            require_int(mapping, "end", field=field, minimum=1),
+            require_str(mapping, "quote", field=field),
+        ),
+        resolved=require_bool(mapping, "resolved", field=field),
+        issues=require_enum_list(mapping, "issues", GroundingIssue, field=field),
+        entity_overlap=require_float(mapping, "entity_overlap", field=field),
+        claimed_numbers=require_float_list(mapping, "claimed_numbers", field=field),
+        quoted_numbers=require_float_list(mapping, "quoted_numbers", field=field),
+        detail=optional_str(mapping, "detail", field=field),
+    )
+
+
+def grounding_report_to_dict(report: GroundingReport) -> dict[str, Any]:
+    """Encode a grounding report with all of its citation checks."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "claim_id": report.claim_id,
+        "statement": report.statement,
+        "flag": report.flag.value,
+        "score": report.score,
+        "issues": [issue.value for issue in report.issues],
+        "checks": [citation_check_to_dict(check) for check in report.checks],
+    }
+
+
+def grounding_report_from_dict(
+    payload: object, *, field: str = "report"
+) -> GroundingReport:
+    """Decode a grounding report."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, GROUNDING_REPORT_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    return GroundingReport(
+        claim_id=require_str(mapping, "claim_id", field=field),
+        statement=require_str(mapping, "statement", field=field),
+        flag=require_enum(mapping, "flag", GroundingFlag, field=field),
+        score=require_float(mapping, "score", field=field, minimum=0.0, maximum=1.0),
+        issues=require_enum_list(mapping, "issues", GroundingIssue, field=field),
+        checks=tuple(
+            citation_check_from_dict(item, field=f"{field}.checks[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "checks", field=field)
+            )
+        ),
+    )
+
+
+def grounding_signature(reports: Sequence[GroundingReport]) -> str:
+    """Return a digest over a sequence of grounding reports."""
+    return content_hash([grounding_report_to_dict(report) for report in reports])
+
+
+def grounding_counts(reports: Sequence[GroundingReport]) -> dict[str, int]:
+    """Return the per-flag counts stored in a grounding document header."""
+    summary = summarize_reports(reports)
+    return {
+        "reports": summary.total,
+        "grounded": summary.grounded,
+        "weakly_grounded": summary.weakly_grounded,
+        "ungrounded": summary.ungrounded,
+        "fabricated": summary.fabricated,
+    }
+
+
+def grounding_reports_to_lines(
+    reports: Sequence[GroundingReport], *, include_meta: bool = True
+) -> list[str]:
+    """Serialize grounding reports as ordered JSONL lines."""
+    lines = (
+        [meta_line(grounding_counts(reports), grounding_signature(reports))]
+        if include_meta
+        else []
+    )
+    lines.extend(
+        dumps_line({"record": "report", "report": grounding_report_to_dict(report)})
+        for report in reports
+    )
+    return lines
+
+
+def grounding_reports_from_lines(
+    lines: Iterable[str], *, verify_meta: bool = True
+) -> tuple[GroundingReport, ...]:
+    """Rebuild grounding reports from JSONL lines, checking the header."""
+    reports: list[GroundingReport] = []
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="grounding", line_number=number)
+        record = require_str(payload, "record", field=f"grounding[{number}]")
+        if record not in GROUNDING_RECORD_TYPES:
+            raise SchemaError(
+                "unknown grounding record type",
+                field=f"grounding[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(GROUNDING_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"grounding[{number}]")
+            check_schema_version(
+                payload, field=f"grounding[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        else:
+            reject_unknown_keys(
+                payload, ("record", "report"), field=f"grounding[{number}]"
+            )
+            reports.append(
+                grounding_report_from_dict(
+                    payload["report"], field=f"grounding[{number}].report"
+                )
+            )
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts=grounding_counts(reports),
+            signature=grounding_signature(reports),
+            kind="grounding",
+            count_keys=GROUNDING_COUNT_KEYS,
+        )
+    return tuple(reports)

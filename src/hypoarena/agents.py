@@ -15,9 +15,12 @@ measures a real model: the adapters exist to make the loop itself testable.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
 
 from hypoarena.errors import (
+    AdapterError,
     ValidationError,
 )
 from hypoarena.ids import (
@@ -156,3 +159,71 @@ def count_words(text: str) -> int:
     accounting for the runner's cost hooks.
     """
     return len(text.split())
+
+
+@runtime_checkable
+class DiscoveryAgent(Protocol):
+    """The surface the generate-debate-evolve loop depends on.
+
+    Keeping the protocol structural means a test double only has to provide the
+    four members below; nothing has to inherit from this package.
+    """
+
+    name: str
+    usage: Usage
+
+    def respond(self, request: AgentRequest) -> AgentResponse: ...
+
+    def propose(self, prompt: str, context: Sequence[str] = ()) -> AgentResponse: ...
+
+    def critique(self, prompt: str, context: Sequence[str] = ()) -> AgentResponse: ...
+
+    def revise(self, prompt: str, context: Sequence[str] = ()) -> AgentResponse: ...
+
+
+class BaseAgent:
+    """Template implementation of :class:`DiscoveryAgent`.
+
+    Subclasses implement :meth:`respond` only. The base class builds the request
+    (including its derived identifier), checks that the reply belongs to the
+    request that was sent, and records usage — so token accounting cannot be
+    forgotten by a new adapter.
+    """
+
+    def __init__(self, name: str) -> None:
+        if not name.strip():
+            raise ValidationError("agent name must not be blank")
+        self.name = name
+        self.usage = Usage()
+
+    def respond(self, request: AgentRequest) -> AgentResponse:
+        """Produce a reply for one request; adapters must override this."""
+        raise NotImplementedError(f"{type(self).__name__} must implement respond()")
+
+    def propose(self, prompt: str, context: Sequence[str] = ()) -> AgentResponse:
+        """Ask the agent for a new hypothesis."""
+        return self.run("propose", prompt, context)
+
+    def critique(self, prompt: str, context: Sequence[str] = ()) -> AgentResponse:
+        """Ask the agent to critique a hypothesis."""
+        return self.run("critique", prompt, context)
+
+    def revise(self, prompt: str, context: Sequence[str] = ()) -> AgentResponse:
+        """Ask the agent to revise a hypothesis in light of a critique."""
+        return self.run("revise", prompt, context)
+
+    def run(self, task: str, prompt: str, context: Sequence[str] = ()) -> AgentResponse:
+        """Build a request, call :meth:`respond` and record the usage."""
+        request = AgentRequest(
+            task=task, prompt=prompt, context=tuple(context), agent=self.name
+        ).with_id()
+        response = self.respond(request)
+        if response.request_id != request.request_id:
+            raise AdapterError(
+                "adapter replied to a different request",
+                agent=self.name,
+                expected=request.request_id,
+                got=response.request_id,
+            )
+        self.usage.record(task, response)
+        return response

@@ -105,9 +105,14 @@ class TransportError(AdapterError):
     code = "transport_error"
 
     def __init__(
-        self, message: str, *, status: int | None = None, attempts: int = 0
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        attempts: int = 0,
+        **details: object,
     ) -> None:
-        super().__init__(message, status=status, attempts=attempts)
+        super().__init__(message, status=status, attempts=attempts, **details)
         self.status = status
         self.attempts = attempts
 

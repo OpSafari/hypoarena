@@ -9,10 +9,12 @@ in error details.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from hypoarena.errors import (
+    TransportError,
     ValidationError,
 )
 
@@ -146,3 +148,63 @@ class ChatRequest:
         if self.max_tokens is not None:
             payload["max_tokens"] = self.max_tokens
         return payload
+
+
+@dataclass(frozen=True)
+class ChatResponse:
+    """The parts of a chat-completions response this toolkit relies on."""
+
+    text: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    finish_reason: str
+    response_id: str
+
+    @property
+    def total_tokens(self) -> int:
+        """Sum of the reported prompt and completion tokens."""
+        return self.prompt_tokens + self.completion_tokens
+
+    @classmethod
+    def from_payload(cls, body: str) -> ChatResponse:
+        """Parse a JSON response body, rejecting malformed shapes.
+
+        Parsing is strict on purpose: a truncated or reshaped upstream response
+        should fail the call, not silently produce an empty hypothesis.
+        """
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as error:
+            raise TransportError(
+                "upstream returned invalid JSON", reason=str(error)
+            ) from None
+        if not isinstance(payload, dict):
+            raise TransportError("upstream response is not a JSON object")
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise TransportError("upstream response has no choices")
+        first = choices[0]
+        if not isinstance(first, dict):
+            raise TransportError("upstream choice is not a JSON object")
+        message = first.get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            raise TransportError("upstream choice has no message content")
+        usage = payload.get("usage") or {}
+        if not isinstance(usage, dict):
+            raise TransportError("upstream usage is not a JSON object")
+        return cls(
+            text=message["content"],
+            model=str(payload.get("model", "")),
+            prompt_tokens=_as_count(usage.get("prompt_tokens")),
+            completion_tokens=_as_count(usage.get("completion_tokens")),
+            finish_reason=str(first.get("finish_reason") or "stop"),
+            response_id=str(payload.get("id", "")),
+        )
+
+
+def _as_count(value: object) -> int:
+    """Coerce a usage counter, treating missing or invalid values as zero."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(0, int(value))

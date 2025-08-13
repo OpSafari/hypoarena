@@ -548,3 +548,27 @@ def replay_transcript(
 def transcript_statement(turns: Sequence[TranscriptTurn]) -> str:
     """Return the statement a transcript converged on."""
     return turns[-1].response.text if turns else ""
+
+
+def merge_usage(*usages: Usage) -> Usage:
+    """Sum several usage records into one.
+
+    Token counts are *recorded*, never priced: nothing in this package turns a
+    count into a cost, because offline adapters have no price list and inventing
+    one would put a made-up number into run artifacts.
+    """
+    merged = Usage()
+    for usage in usages:
+        merged.calls += usage.calls
+        merged.prompt_tokens += usage.prompt_tokens
+        merged.completion_tokens += usage.completion_tokens
+        for task, count in usage.by_task.items():
+            merged.by_task[task] = merged.by_task.get(task, 0) + count
+    return merged
+
+
+def usage_summary(agents: Sequence[BaseAgent]) -> dict[str, object]:
+    """Return per-agent usage plus a merged total, for run metadata."""
+    per_agent = {agent.name: agent.usage.as_dict() for agent in agents}
+    total = merge_usage(*(agent.usage for agent in agents))
+    return {"agents": per_agent, "total": total.as_dict()}

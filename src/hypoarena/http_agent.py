@@ -10,9 +10,19 @@ in error details.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
+from time import sleep
+from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
+from hypoarena.agents import (
+    AgentRequest,
+    AgentResponse,
+    BaseAgent,
+)
 from hypoarena.errors import (
     TransportError,
     ValidationError,
@@ -208,3 +218,122 @@ def _as_count(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0
     return max(0, int(value))
+
+
+class Transport(Protocol):
+    """One POST call; returns the HTTP status and the raw response body."""
+
+    def post(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> tuple[int, str]: ...
+
+
+@dataclass
+class UrllibTransport:
+    """Default transport built on the standard library.
+
+    HTTP error statuses are returned to the caller (so the retry policy can see
+    them); only connection-level failures raise, because those have no status to
+    report.
+    """
+
+    def post(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> tuple[int, str]:
+        """POST ``payload`` as JSON and return ``(status, body)``."""
+        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        request = Request(url, data=body, headers=dict(headers), method="POST")
+        try:
+            with urlopen(request, timeout=timeout) as response:  # noqa: S310
+                return int(response.status), response.read().decode("utf-8")
+        except HTTPError as error:
+            return error.code, error.read().decode("utf-8", errors="replace")
+        except (URLError, TimeoutError, OSError) as error:
+            raise TransportError(f"cannot reach {url}", reason=str(error)) from error
+
+
+class HttpAgent(BaseAgent):
+    """Adapter that turns agent requests into chat-completions calls."""
+
+    def __init__(
+        self,
+        config: HttpConfig | None = None,
+        *,
+        name: str = "http",
+        transport: Transport | None = None,
+        system_prompt: str = "",
+    ) -> None:
+        super().__init__(name)
+        self.config = config or HttpConfig()
+        self.transport: Transport = transport or UrllibTransport()
+        self.system_prompt = system_prompt
+
+    def messages_for(self, request: AgentRequest) -> tuple[ChatMessage, ...]:
+        """Flatten a request into chat messages: prompt first, context after."""
+        content = "\n".join((request.prompt, *request.context)).strip()
+        messages = []
+        if self.system_prompt.strip():
+            messages.append(ChatMessage("system", self.system_prompt))
+        messages.append(ChatMessage("user", content))
+        return tuple(messages)
+
+    def respond(self, request: AgentRequest) -> AgentResponse:
+        """POST one request, applying the retry policy from the config."""
+        payload = ChatRequest(
+            model=self.config.model,
+            messages=self.messages_for(request),
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        ).to_payload()
+        url = self.config.endpoint()
+        headers = self.config.headers()
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                status, body = self.transport.post(
+                    url, payload, headers, self.config.timeout
+                )
+            except TransportError:
+                if attempts > self.config.max_retries:
+                    raise TransportError(
+                        "upstream unreachable after retries",
+                        attempts=attempts,
+                        url=url,
+                    ) from None
+                self.wait_before_retry(attempts)
+                continue
+            if (
+                status in self.config.retry_statuses
+                and attempts <= self.config.max_retries
+            ):
+                self.wait_before_retry(attempts)
+                continue
+            if not 200 <= status < 300:
+                raise TransportError(
+                    f"upstream returned HTTP {status}", status=status, attempts=attempts
+                )
+            chat = ChatResponse.from_payload(body)
+            return AgentResponse(
+                request_id=request.request_id,
+                text=chat.text,
+                agent=self.name,
+                prompt_tokens=chat.prompt_tokens,
+                completion_tokens=chat.completion_tokens,
+                model=chat.model or self.config.model,
+                finish_reason=chat.finish_reason,
+            )
+
+    def wait_before_retry(self, attempt: int) -> None:
+        """Sleep the configured backoff; zero keeps retries instantaneous."""
+        delay = self.config.retry_backoff * attempt
+        if delay > 0:
+            sleep(delay)

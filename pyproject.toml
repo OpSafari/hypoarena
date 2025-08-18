@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hypoarena"
+version = "0.1.0"
+description = "Offline workbench for hypothesis-discovery pipelines: grounded claim graphs, synthetic literature, debate loops, Elo tournaments and evidence accumulation."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [
+    { name = "Zhu YiJin", email = "224075686+Netrixo@users.noreply.github.com" },
+]
+keywords = [
+    "hypothesis-discovery",
+    "multi-agent",
+    "scientific-literature",
+    "elo",
+    "reproducibility",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "hatchling>=1.27",
+    "mypy>=1.11",
+    "pytest>=8.2",
+    "ruff>=0.6",
+]
+torch = ["torch>=2.2"]
+
+[project.scripts]
+hypoarena = "hypoarena.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Netrixo/hypoarena"
+Source = "https://github.com/Netrixo/hypoarena"
+Issues = "https://github.com/Netrixo/hypoarena/issues"
+Changelog = "https://github.com/Netrixo/hypoarena/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hypoarena"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/hypoarena",
+    "tests",
+    "examples",
+    "scripts",
+    "docs",
+    "Makefile",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "slow: long-running training or integration checks (excluded from `make test`)",
+    "model: requires the optional `torch` extra (skipped when torch is absent)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "tests", "examples", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["SIM108"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["E501"]
+"tests/test_golden_*.py" = ["E501"]
+
+[tool.mypy]
+files = ["src/hypoarena", "scripts"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true

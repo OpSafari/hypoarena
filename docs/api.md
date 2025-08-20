@@ -32,6 +32,8 @@
 | `hypoarena.corpus` | 已实现 | 文档与语料容器、span 解析与采样（`Document`、`Corpus`、`CorpusStats`、`sample_spans`），见 [corpus.md](corpus.md) |
 | `hypoarena.synthetic` | 已实现 | 植入真值的合成文献工厂（`SyntheticConfig`、`generate`、`build_bundle`、`SyntheticBundle`、`PlantedTruth`），见 [synthetic.md](synthetic.md) |
 | `hypoarena.grounding` | 已实现 | span 级 grounding 校验（`GroundingVerifier`、`VerifierConfig`、`GroundingReport`、`GroundingFlag`），见 [grounding.md](grounding.md) |
+| `hypoarena.agents` | 已实现 | agent 协议与离线适配器（`ScriptedAgent`、`ReplayAgent`、`RecordingAgent`、`replay_transcript`、`Usage`），见 [agents.md](agents.md) |
+| `hypoarena.http_agent` | 已实现 | OpenAI 兼容 HTTP 适配器（`HttpConfig`、`HttpAgent`、`ChatRequest`、`ChatResponse`），默认仅允许 loopback |
 | `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
 
 记录字段与校验规则详见 [schema.md](schema.md)。后续模块（graph、corpus、

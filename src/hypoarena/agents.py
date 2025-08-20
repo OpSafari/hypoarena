@@ -572,3 +572,49 @@ def usage_summary(agents: Sequence[BaseAgent]) -> dict[str, object]:
     per_agent = {agent.name: agent.usage.as_dict() for agent in agents}
     total = merge_usage(*(agent.usage for agent in agents))
     return {"agents": per_agent, "total": total.as_dict()}
+
+
+class RecordingAgent(BaseAgent):
+    """Wraps another agent and records every exchange as a replay entry.
+
+    The point is offline reproducibility: run once against a live adapter, write
+    the captured fixture, and every later test replays the same conversation
+    without a socket. Recorded entries keep the inner agent's name and token
+    counts, so accounting survives the round trip.
+
+    Recording forwards to the inner adapter's ``respond`` (not its ``run``), so
+    the recorder — not the inner adapter — accumulates the usage for a recorded
+    exchange, and request options such as ``max_tokens`` are preserved verbatim.
+    """
+
+    def __init__(self, inner: DiscoveryAgent, name: str = "recorder") -> None:
+        super().__init__(name)
+        self.inner = inner
+        self.entries: list[ReplayEntry] = []
+
+    def respond(self, request: AgentRequest) -> AgentResponse:
+        """Forward to the inner agent and record the exchange."""
+        response = self.inner.respond(request)
+        self.entries.append(
+            ReplayEntry(
+                task=request.task,
+                prompt=request.prompt,
+                text=response.text,
+                agent=response.agent,
+                context=request.context,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+                model=response.model,
+            )
+        )
+        return response
+
+    def fixture(self) -> tuple[ReplayEntry, ...]:
+        """Return the recorded entries in call order."""
+        return tuple(self.entries)
+
+    def replay_agent(
+        self, name: str = "replay", *, mode: str = "sequence"
+    ) -> ReplayAgent:
+        """Build a replay agent that reproduces this recording."""
+        return ReplayAgent(name, self.fixture(), mode=mode)

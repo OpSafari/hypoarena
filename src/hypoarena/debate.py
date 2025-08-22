@@ -10,10 +10,13 @@ agents.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from hypoarena.agents import (
     AgentResponse,
+    DiscoveryAgent,
+    merge_usage,
 )
 from hypoarena.errors import (
     ValidationError,
@@ -83,16 +86,16 @@ class DebateTurn:
 
 DEFAULT_PROPOSAL_PROMPT = "Propose one hypothesis supported by the context."
 DEFAULT_CRITIQUE_PROMPT = "Critique this hypothesis: {statement}"
-DEFAULT_REVISE_PROMPT = "Revise this hypothesis using the critiques: {statement}"
 
 
 @dataclass(frozen=True)
 class DebateConfig:
     """How many rounds to run and what to ask the agents.
 
-    ``critic_prompt`` and ``revise_prompt`` must contain ``{statement}`` so the
-    statement under debate is always part of the request; that is what makes a
-    transcript reproducible from its context alone.
+    ``critique_prompt`` must contain ``{statement}`` so the statement under
+    debate is part of the instruction. Revision follows the adapter convention
+    instead: the statement is the prompt and the critiques are the context, which
+    is what ``replay_transcript`` and the recorded fixtures already assume.
     """
 
     rounds: int = 2
@@ -100,7 +103,6 @@ class DebateConfig:
     stop_on_unchanged: bool = True
     proposal_prompt: str = DEFAULT_PROPOSAL_PROMPT
     critique_prompt: str = DEFAULT_CRITIQUE_PROMPT
-    revise_prompt: str = DEFAULT_REVISE_PROMPT
 
     def __post_init__(self) -> None:
         if self.rounds < 1:
@@ -109,10 +111,10 @@ class DebateConfig:
             raise ValidationError(
                 "a debate needs at least one critic", critics=self.critics
             )
-        for name in ("proposal_prompt", "critique_prompt", "revise_prompt"):
+        for name in ("proposal_prompt", "critique_prompt"):
             if not getattr(self, name).strip():
                 raise ValidationError(f"{name} must not be blank")
-        for name in ("critique_prompt", "revise_prompt"):
+        for name in ("critique_prompt",):
             if "{statement}" not in getattr(self, name):
                 raise ValidationError(
                     f"{name} must contain the {{statement}} placeholder",
@@ -136,6 +138,157 @@ class DebateConfig:
                 "stop_on_unchanged": self.stop_on_unchanged,
                 "proposal_prompt": self.proposal_prompt,
                 "critique_prompt": self.critique_prompt,
-                "revise_prompt": self.revise_prompt,
             }
         )
+
+
+@dataclass(frozen=True)
+class DebateResult:
+    """Everything one debate produced, including its accounting."""
+
+    proposal: str
+    final_statement: str
+    turns: tuple[DebateTurn, ...]
+    converged: bool
+    rounds_run: int
+    agents: tuple[str, ...]
+    usage: dict[str, object]
+    context: tuple[str, ...]
+    config_fingerprint: str
+
+    def transcript(self) -> tuple[str, ...]:
+        """Return the full transcript as readable lines."""
+        lines = [f"proposal: {self.proposal}"]
+        for turn in self.turns:
+            lines.extend(turn.transcript())
+        lines.append(f"final: {self.final_statement}")
+        lines.append(
+            f"converged={self.converged} rounds={self.rounds_run} "
+            f"agents={','.join(self.agents)}"
+        )
+        return tuple(lines)
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready summary (without the full transcript)."""
+        return {
+            "proposal": self.proposal,
+            "final_statement": self.final_statement,
+            "rounds_run": self.rounds_run,
+            "converged": self.converged,
+            "agents": list(self.agents),
+            "context_lines": len(self.context),
+            "config_fingerprint": self.config_fingerprint,
+            "usage": self.usage,
+        }
+
+    def signature(self) -> str:
+        """Return a digest over the transcript, for run-to-run comparison."""
+        return content_hash(list(self.transcript()))
+
+
+class DebateLoop:
+    """Drives one proposer, N critics and one reviser through the rounds."""
+
+    def __init__(
+        self,
+        proposer: DiscoveryAgent,
+        critics: Sequence[DiscoveryAgent],
+        reviser: DiscoveryAgent | None = None,
+        config: DebateConfig | None = None,
+    ) -> None:
+        for role, agent in (("proposer", proposer), ("reviser", reviser or proposer)):
+            if not isinstance(agent, DiscoveryAgent):
+                raise ValidationError(
+                    f"{role} must satisfy the DiscoveryAgent protocol",
+                    role=role,
+                    got=type(agent).__name__,
+                )
+        critic_list = tuple(critics)
+        if not critic_list:
+            raise ValidationError("a debate needs at least one critic")
+        for index, critic in enumerate(critic_list):
+            if not isinstance(critic, DiscoveryAgent):
+                raise ValidationError(
+                    "critics must satisfy the DiscoveryAgent protocol",
+                    index=index,
+                    got=type(critic).__name__,
+                )
+        self.proposer = proposer
+        self.critics = critic_list[: (config or DebateConfig()).critics] or critic_list
+        self.reviser = reviser or proposer
+        self.config = config or DebateConfig()
+        if len(critic_list) < self.config.critics:
+            raise ValidationError(
+                "not enough critics for the configured debate",
+                available=len(critic_list),
+                required=self.config.critics,
+            )
+
+    @property
+    def agent_names(self) -> tuple[str, ...]:
+        """Distinct agent names taking part, in role order."""
+        seen: list[str] = []
+        for agent in (self.proposer, *self.critics, self.reviser):
+            if agent.name not in seen:
+                seen.append(agent.name)
+        return tuple(seen)
+
+    def run(self, context: Sequence[str] = ()) -> DebateResult:
+        """Run the debate and return its result.
+
+        The loop stops early when a revision changes nothing and
+        ``stop_on_unchanged`` is set; ``converged`` reports whether that fixed
+        point was reached inside the round budget. Revision follows the adapter
+        convention: the statement is the prompt and the critiques are context, so
+        an agent that returns the statement unchanged really has converged.
+        """
+        lines = tuple(context)
+        proposal = self.proposer.propose(self.config.proposal_prompt, lines)
+        statement = proposal.text
+        turns: list[DebateTurn] = []
+        converged = False
+        for index in range(self.config.rounds):
+            critiques = tuple(
+                Critique.from_response(
+                    critic.critique(self.config.critique_prompt_for(statement), lines)
+                )
+                for critic in self.critics
+            )
+            revision = self.reviser.revise(
+                statement, tuple(critique.text for critique in critiques)
+            )
+            turn = DebateTurn(
+                round_index=index,
+                statement=statement,
+                critiques=critiques,
+                revised=revision.text,
+            )
+            turns.append(turn)
+            changed = turn.changed
+            statement = revision.text if changed else statement
+            if not changed:
+                converged = True
+                if self.config.stop_on_unchanged:
+                    break
+        return DebateResult(
+            proposal=proposal.text,
+            final_statement=statement,
+            turns=tuple(turns),
+            converged=converged,
+            rounds_run=len(turns),
+            agents=self.agent_names,
+            usage=self.usage_summary(),
+            context=lines,
+            config_fingerprint=self.config.fingerprint(),
+        )
+
+    def usage_summary(self) -> dict[str, object]:
+        """Return per-agent and total usage for the agents in this loop."""
+        distinct: list[DiscoveryAgent] = []
+        for agent in (self.proposer, *self.critics, self.reviser):
+            if not any(agent is item for item in distinct):
+                distinct.append(agent)
+        return {
+            "agents": {agent.name: agent.usage.as_dict() for agent in distinct},
+            "total": merge_usage(*(agent.usage for agent in distinct)).as_dict(),
+        }

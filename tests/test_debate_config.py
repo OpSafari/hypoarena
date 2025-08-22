@@ -7,7 +7,6 @@ import pytest
 from hypoarena.debate import (
     DEFAULT_CRITIQUE_PROMPT,
     DEFAULT_PROPOSAL_PROMPT,
-    DEFAULT_REVISE_PROMPT,
     DebateConfig,
 )
 from hypoarena.errors import ValidationError
@@ -20,7 +19,6 @@ def test_defaults_are_golden() -> None:
     assert config.stop_on_unchanged is True
     assert config.proposal_prompt == DEFAULT_PROPOSAL_PROMPT
     assert config.critique_prompt == DEFAULT_CRITIQUE_PROMPT
-    assert config.revise_prompt == DEFAULT_REVISE_PROMPT
 
 
 def test_counts_are_validated_in_both_directions() -> None:
@@ -36,8 +34,6 @@ def test_prompts_must_not_be_blank_and_must_carry_the_statement() -> None:
         DebateConfig(proposal_prompt="  ")
     with pytest.raises(ValidationError, match="placeholder"):
         DebateConfig(critique_prompt="critique it")
-    with pytest.raises(ValidationError, match="placeholder"):
-        DebateConfig(revise_prompt="revise it")
 
 
 def test_prompt_rendering_substitutes_the_statement() -> None:
@@ -45,7 +41,6 @@ def test_prompt_rendering_substitutes_the_statement() -> None:
     assert config.critique_prompt_for("A increases B") == (
         "Critique this hypothesis: A increases B"
     )
-    assert config.revise_prompt_for("A increases B").endswith("A increases B")
 
 
 def test_custom_prompts_render_with_the_same_contract() -> None:

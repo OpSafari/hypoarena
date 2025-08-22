@@ -10,7 +10,7 @@ agents.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from hypoarena.agents import (
@@ -18,14 +18,22 @@ from hypoarena.agents import (
     DiscoveryAgent,
     merge_usage,
 )
+from hypoarena.corpus import (
+    Corpus,
+)
 from hypoarena.errors import (
     ValidationError,
 )
 from hypoarena.ids import (
     content_hash,
 )
+from hypoarena.schema import (
+    Claim,
+)
 from hypoarena.text import (
     normalize,
+    normalize_whitespace,
+    sentence_split,
 )
 
 
@@ -292,3 +300,45 @@ class DebateLoop:
             "agents": {agent.name: agent.usage.as_dict() for agent in distinct},
             "total": merge_usage(*(agent.usage for agent in distinct)).as_dict(),
         }
+
+
+MIN_CONTEXT_CHARS = 20
+CONTEXT_ELLIPSIS = "..."
+
+
+def corpus_context(
+    corpus: Corpus, *, limit: int = 6, max_chars: int = 200
+) -> tuple[str, ...]:
+    """Return context lines from a corpus, one per document.
+
+    Documents are visited in identifier order and only their first sentence is
+    used (truncated with an ellipsis when it is longer than ``max_chars``), so
+    the same corpus always yields the same context and a debate transcript can
+    be reproduced from the corpus alone.
+    """
+    if limit < 1:
+        raise ValidationError("context limit must be >= 1", limit=limit)
+    if max_chars < MIN_CONTEXT_CHARS:
+        raise ValidationError(
+            "context max_chars is too small",
+            max_chars=max_chars,
+            minimum=MIN_CONTEXT_CHARS,
+        )
+    lines: list[str] = []
+    for document in corpus.documents:
+        if len(lines) >= limit:
+            break
+        sentences = sentence_split(document.text)
+        line = sentences[0] if sentences else normalize_whitespace(document.text)
+        if len(line) > max_chars:
+            cut = max_chars - len(CONTEXT_ELLIPSIS)
+            line = line[:cut].rstrip() + CONTEXT_ELLIPSIS
+        lines.append(line)
+    return tuple(lines)
+
+
+def claim_context(claims: Iterable[Claim], *, limit: int = 6) -> tuple[str, ...]:
+    """Return the statements of existing claims as context for a new debate."""
+    if limit < 1:
+        raise ValidationError("context limit must be >= 1", limit=limit)
+    return tuple(claim.statement for claim in list(claims)[:limit])

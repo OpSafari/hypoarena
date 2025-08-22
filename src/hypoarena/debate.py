@@ -18,6 +18,9 @@ from hypoarena.agents import (
 from hypoarena.errors import (
     ValidationError,
 )
+from hypoarena.ids import (
+    content_hash,
+)
 from hypoarena.text import (
     normalize,
 )
@@ -76,3 +79,63 @@ class DebateTurn:
         )
         lines.append(f"  revised: {self.revised}")
         return tuple(lines)
+
+
+DEFAULT_PROPOSAL_PROMPT = "Propose one hypothesis supported by the context."
+DEFAULT_CRITIQUE_PROMPT = "Critique this hypothesis: {statement}"
+DEFAULT_REVISE_PROMPT = "Revise this hypothesis using the critiques: {statement}"
+
+
+@dataclass(frozen=True)
+class DebateConfig:
+    """How many rounds to run and what to ask the agents.
+
+    ``critic_prompt`` and ``revise_prompt`` must contain ``{statement}`` so the
+    statement under debate is always part of the request; that is what makes a
+    transcript reproducible from its context alone.
+    """
+
+    rounds: int = 2
+    critics: int = 2
+    stop_on_unchanged: bool = True
+    proposal_prompt: str = DEFAULT_PROPOSAL_PROMPT
+    critique_prompt: str = DEFAULT_CRITIQUE_PROMPT
+    revise_prompt: str = DEFAULT_REVISE_PROMPT
+
+    def __post_init__(self) -> None:
+        if self.rounds < 1:
+            raise ValidationError("debate rounds must be >= 1", rounds=self.rounds)
+        if self.critics < 1:
+            raise ValidationError(
+                "a debate needs at least one critic", critics=self.critics
+            )
+        for name in ("proposal_prompt", "critique_prompt", "revise_prompt"):
+            if not getattr(self, name).strip():
+                raise ValidationError(f"{name} must not be blank")
+        for name in ("critique_prompt", "revise_prompt"):
+            if "{statement}" not in getattr(self, name):
+                raise ValidationError(
+                    f"{name} must contain the {{statement}} placeholder",
+                    value=getattr(self, name),
+                )
+
+    def critique_prompt_for(self, statement: str) -> str:
+        """Render the critique prompt for one statement."""
+        return self.critique_prompt.format(statement=statement)
+
+    def revise_prompt_for(self, statement: str) -> str:
+        """Render the revision prompt for one statement."""
+        return self.revise_prompt.format(statement=statement)
+
+    def fingerprint(self) -> str:
+        """Return a digest of the configuration for run metadata."""
+        return content_hash(
+            {
+                "rounds": self.rounds,
+                "critics": self.critics,
+                "stop_on_unchanged": self.stop_on_unchanged,
+                "proposal_prompt": self.proposal_prompt,
+                "critique_prompt": self.critique_prompt,
+                "revise_prompt": self.revise_prompt,
+            }
+        )

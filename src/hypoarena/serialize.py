@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,7 @@ from hypoarena.codec import (
     require_str_tuple,
 )
 from hypoarena.corpus import Corpus, Document
+from hypoarena.debate import Critique, DebateResult, DebateTurn
 from hypoarena.errors import ArtifactError, SchemaError
 from hypoarena.graph import ClaimEdge, GraphStats, HypothesisGraph
 from hypoarena.grounding import (
@@ -1374,3 +1376,201 @@ def http_config_from_dict(payload: object, *, field: str = "http") -> HttpConfig
         ),
         allow_remote=require_bool(mapping, "allow_remote", field=field),
     )
+
+
+CRITIQUE_KEYS = ("agent", "text", "request_id")
+TURN_KEYS = ("round_index", "statement", "critiques", "revised")
+RESULT_KEYS = (
+    "schema_version",
+    "proposal",
+    "final_statement",
+    "rounds_run",
+    "converged",
+    "agents",
+    "context",
+    "config_fingerprint",
+    "usage",
+    "turns",
+)
+RESULT_LINE_KEYS = tuple(key for key in RESULT_KEYS if key != "turns")
+DEBATE_RECORD_TYPES = ("meta", "turn", "result")
+DEBATE_COUNT_KEYS = ("turns",)
+
+
+def critique_to_dict(critique: Critique) -> dict[str, Any]:
+    """Encode one critique."""
+    return {
+        "agent": critique.agent,
+        "text": critique.text,
+        "request_id": critique.request_id,
+    }
+
+
+def critique_from_dict(payload: object, *, field: str = "critique") -> Critique:
+    """Decode one critique."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, CRITIQUE_KEYS, field=field)
+    return Critique(
+        agent=require_str(mapping, "agent", field=field),
+        text=require_str(mapping, "text", field=field),
+        request_id=require_str(mapping, "request_id", field=field),
+    )
+
+
+def turn_to_dict(turn: DebateTurn) -> dict[str, Any]:
+    """Encode one debate round."""
+    return {
+        "round_index": turn.round_index,
+        "statement": turn.statement,
+        "critiques": [critique_to_dict(item) for item in turn.critiques],
+        "revised": turn.revised,
+    }
+
+
+def turn_from_dict(payload: object, *, field: str = "turn") -> DebateTurn:
+    """Decode one debate round."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, TURN_KEYS, field=field)
+    return DebateTurn(
+        round_index=require_int(mapping, "round_index", field=field, minimum=0),
+        statement=require_str(mapping, "statement", field=field),
+        critiques=tuple(
+            critique_from_dict(item, field=f"{field}.critiques[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "critiques", field=field)
+            )
+        ),
+        revised=require_str(mapping, "revised", field=field, allow_empty=True),
+    )
+
+
+def debate_result_to_dict(result: DebateResult) -> dict[str, Any]:
+    """Encode a full debate result, including its turns."""
+    payload = debate_summary_to_dict(result)
+    payload["turns"] = [turn_to_dict(turn) for turn in result.turns]
+    return payload
+
+
+def debate_summary_to_dict(result: DebateResult) -> dict[str, Any]:
+    """Encode a debate result without its turns (the JSONL result line)."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "proposal": result.proposal,
+        "final_statement": result.final_statement,
+        "rounds_run": result.rounds_run,
+        "converged": result.converged,
+        "agents": list(result.agents),
+        "context": list(result.context),
+        "config_fingerprint": result.config_fingerprint,
+        "usage": result.usage,
+    }
+
+
+def debate_result_from_dict(payload: object, *, field: str = "debate") -> DebateResult:
+    """Decode a full debate result."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, RESULT_KEYS, field=field)
+    summary = debate_summary_from_mapping(mapping, field=field)
+    turns = tuple(
+        turn_from_dict(item, field=f"{field}.turns[{index}]")
+        for index, item in enumerate(
+            require_mapping_list(mapping, "turns", field=field)
+        )
+    )
+    return replace(summary, turns=turns)
+
+
+def debate_summary_from_mapping(
+    mapping: Mapping[str, Any], *, field: str, allowed: Sequence[str] = RESULT_KEYS
+) -> DebateResult:
+    """Decode the shared part of a debate payload."""
+    reject_unknown_keys(mapping, (*allowed, "turns"), field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    usage = require_mapping(
+        present_value(mapping, "usage", field=field), field=f"{field}.usage"
+    )
+    return DebateResult(
+        proposal=require_str(mapping, "proposal", field=field),
+        final_statement=require_str(mapping, "final_statement", field=field),
+        turns=(),
+        converged=require_bool(mapping, "converged", field=field),
+        rounds_run=require_int(mapping, "rounds_run", field=field, minimum=0),
+        agents=require_str_tuple(mapping, "agents", field=field),
+        usage=dict(usage),
+        context=require_str_tuple(mapping, "context", field=field),
+        config_fingerprint=require_str(mapping, "config_fingerprint", field=field),
+    )
+
+
+def debate_signature(result: DebateResult) -> str:
+    """Return a digest over the encoded transcript."""
+    return content_hash(debate_result_to_dict(result))
+
+
+def debate_to_lines(result: DebateResult, *, include_meta: bool = True) -> list[str]:
+    """Serialize a debate as ordered JSONL lines: header, turns, result."""
+    lines = (
+        [meta_line({"turns": len(result.turns)}, debate_signature(result))]
+        if include_meta
+        else []
+    )
+    lines.extend(
+        dumps_line({"record": "turn", "turn": turn_to_dict(turn)})
+        for turn in result.turns
+    )
+    lines.append(
+        dumps_line({"record": "result", "result": debate_summary_to_dict(result)})
+    )
+    return lines
+
+
+def debate_from_lines(
+    lines: Iterable[str], *, verify_meta: bool = True
+) -> DebateResult:
+    """Rebuild a debate result from JSONL lines."""
+    turns: list[DebateTurn] = []
+    result: DebateResult | None = None
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="debate", line_number=number)
+        record = require_str(payload, "record", field=f"debate[{number}]")
+        if record not in DEBATE_RECORD_TYPES:
+            raise SchemaError(
+                "unknown debate record type",
+                field=f"debate[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(DEBATE_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"debate[{number}]")
+            check_schema_version(
+                payload, field=f"debate[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        elif record == "turn":
+            reject_unknown_keys(payload, ("record", "turn"), field=f"debate[{number}]")
+            turns.append(turn_from_dict(payload["turn"], field=f"debate[{number}]"))
+        else:
+            reject_unknown_keys(
+                payload, ("record", "result"), field=f"debate[{number}]"
+            )
+            result = debate_summary_from_mapping(
+                payload["result"],
+                field=f"debate[{number}].result",
+                allowed=RESULT_LINE_KEYS,
+            )
+    if result is None:
+        raise SchemaError("debate document has no result line", field="debate")
+    rebuilt = replace(result, turns=tuple(turns))
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts={"turns": len(turns)},
+            signature=debate_signature(rebuilt),
+            kind="debate",
+            count_keys=DEBATE_COUNT_KEYS,
+        )
+    return rebuilt

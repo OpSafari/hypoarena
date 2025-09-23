@@ -142,3 +142,101 @@ def weighted_total(score: RubricScore, weights: RubricWeights) -> float:
     return sum(
         score.dimension(name) * normalized.weight(name) for name in RUBRIC_DIMENSIONS
     )
+
+
+DEFAULT_INITIAL_RATING = 1500.0
+DEFAULT_K_FACTOR = 32.0
+DEFAULT_K_DECAY = 0.97
+DEFAULT_K_FLOOR = 6.0
+DEFAULT_RATING_SCALE = 400.0
+DEFAULT_DRAW_MARGIN = 0.05
+OUTCOMES: tuple[float, ...] = (0.0, 0.5, 1.0)
+
+
+@dataclass(frozen=True)
+class EloModel:
+    """Bradley–Terry style pairwise rating model.
+
+    ``expectation`` is the logistic win probability implied by two ratings;
+    ``update`` moves both ratings by ``K × (score − expectation)``. Draws score
+    ``0.5``, and ``draw_margin`` decides when two rubric totals are close enough
+    to count as one.
+    """
+
+    initial: float = DEFAULT_INITIAL_RATING
+    k_factor: float = DEFAULT_K_FACTOR
+    k_decay: float = DEFAULT_K_DECAY
+    k_floor: float = DEFAULT_K_FLOOR
+    scale: float = DEFAULT_RATING_SCALE
+    draw_margin: float = DEFAULT_DRAW_MARGIN
+
+    def __post_init__(self) -> None:
+        if self.k_factor <= 0:
+            raise ValidationError("k_factor must be > 0", k_factor=self.k_factor)
+        if not 0.0 < self.k_decay <= 1.0:
+            raise ValidationError(
+                "k_decay must lie within (0, 1]", k_decay=self.k_decay
+            )
+        if not 0.0 <= self.k_floor <= self.k_factor:
+            raise ValidationError(
+                "k_floor must lie within [0, k_factor]",
+                k_floor=self.k_floor,
+                k_factor=self.k_factor,
+            )
+        if self.scale <= 0:
+            raise ValidationError("scale must be > 0", scale=self.scale)
+        if not 0.0 <= self.draw_margin < 1.0:
+            raise ValidationError(
+                "draw_margin must lie within [0, 1)", draw_margin=self.draw_margin
+            )
+
+    def expectation(self, left: float, right: float) -> float:
+        """Return the expected score of ``left`` against ``right``."""
+        return 1.0 / (1.0 + 10.0 ** ((right - left) / self.scale))
+
+    def k_for(self, played: int) -> float:
+        """Return the K factor after ``played`` matches (see :mod:`docs`)."""
+        if played < 0:
+            raise ValidationError("played must be >= 0", played=played)
+        return max(self.k_floor, self.k_factor * self.k_decay**played)
+
+    def outcome(self, left_total: float, right_total: float) -> float:
+        """Return 1.0, 0.5 or 0.0 for a left win, a draw or a left loss."""
+        difference = left_total - right_total
+        if abs(difference) <= self.draw_margin:
+            return 0.5
+        return 1.0 if difference > 0 else 0.0
+
+    def update(
+        self,
+        left: float,
+        right: float,
+        outcome: float,
+        *,
+        left_played: int = 0,
+        right_played: int = 0,
+    ) -> tuple[float, float]:
+        """Return the updated ratings for both sides of one match."""
+        if outcome not in OUTCOMES:
+            raise ValidationError(
+                "outcome must be 0.0, 0.5 or 1.0",
+                outcome=outcome,
+                allowed=list(OUTCOMES),
+            )
+        expected = self.expectation(left, right)
+        left_delta = self.k_for(left_played) * (outcome - expected)
+        right_delta = self.k_for(right_played) * ((1.0 - outcome) - (1.0 - expected))
+        return (left + left_delta, right + right_delta)
+
+    def fingerprint(self) -> str:
+        """Return a digest of the model settings for run metadata."""
+        return content_hash(
+            {
+                "initial": self.initial,
+                "k_factor": self.k_factor,
+                "k_decay": self.k_decay,
+                "k_floor": self.k_floor,
+                "scale": self.scale,
+                "draw_margin": self.draw_margin,
+            }
+        )

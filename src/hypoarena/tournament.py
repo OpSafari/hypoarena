@@ -13,7 +13,7 @@ planted qualities on synthetic claims for exactly that reason.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from hypoarena.errors import (
     ValidationError,
@@ -240,3 +240,75 @@ class EloModel:
                 "draw_margin": self.draw_margin,
             }
         )
+
+
+@dataclass(frozen=True)
+class Rating:
+    """One subject's standing in a tournament.
+
+    The tally invariant ``played == wins + losses + draws`` is enforced at
+    construction, so a rating table that has drifted out of sync with the audit
+    trail cannot be built in the first place.
+    """
+
+    subject: str
+    elo: float = DEFAULT_INITIAL_RATING
+    played: int = 0
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.subject.strip():
+            raise ValidationError("rating subject must not be blank")
+        for name in ("played", "wins", "losses", "draws"):
+            value = getattr(self, name)
+            if value < 0:
+                raise ValidationError(f"{name} must be >= 0", **{name: value})
+        if self.played != self.wins + self.losses + self.draws:
+            raise ValidationError(
+                "rating tally disagrees with matches played",
+                played=self.played,
+                wins=self.wins,
+                losses=self.losses,
+                draws=self.draws,
+            )
+
+    @property
+    def win_rate(self) -> float:
+        """Wins plus half a point per draw, divided by matches played."""
+        if not self.played:
+            return 0.0
+        return self.score_points / self.played
+
+    @property
+    def score_points(self) -> float:
+        """Tournament points: one per win, a half per draw."""
+        return self.wins + 0.5 * self.draws
+
+    def advanced(self, outcome: float, elo: float) -> Rating:
+        """Return the rating after one match played from this side's view."""
+        if outcome not in OUTCOMES:
+            raise ValidationError(
+                "outcome must be 0.0, 0.5 or 1.0",
+                outcome=outcome,
+                allowed=list(OUTCOMES),
+            )
+        if outcome == 1.0:
+            return replace(self, elo=elo, played=self.played + 1, wins=self.wins + 1)
+        if outcome == 0.5:
+            return replace(self, elo=elo, played=self.played + 1, draws=self.draws + 1)
+        return replace(self, elo=elo, played=self.played + 1, losses=self.losses + 1)
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view used by reports and artifacts."""
+        return {
+            "subject": self.subject,
+            "elo": round(self.elo, 4),
+            "played": self.played,
+            "wins": self.wins,
+            "losses": self.losses,
+            "draws": self.draws,
+            "win_rate": round(self.win_rate, 4),
+            "score_points": self.score_points,
+        }

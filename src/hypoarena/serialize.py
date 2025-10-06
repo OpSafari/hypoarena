@@ -71,6 +71,15 @@ from hypoarena.synthetic import (
     PlantedLink,
     PlantedTruth,
 )
+from hypoarena.tournament import (
+    EloModel,
+    MatchResult,
+    Rating,
+    RubricScore,
+    RubricWeights,
+    TournamentConfig,
+    TournamentResult,
+)
 
 SCOPE_KEYS = ("population", "conditions")
 CLAIM_KEYS = (
@@ -1574,3 +1583,330 @@ def debate_from_lines(
             count_keys=DEBATE_COUNT_KEYS,
         )
     return rebuilt
+
+
+RUBRIC_KEYS = ("novelty", "testability", "grounding", "consistency")
+RATING_KEYS = ("subject", "elo", "played", "wins", "losses", "draws")
+MATCH_KEYS = (
+    "left",
+    "right",
+    "left_score",
+    "right_score",
+    "left_total",
+    "right_total",
+    "outcome",
+    "judge",
+    "round_index",
+    "match_index",
+    "seed",
+)
+ELO_MODEL_KEYS = ("initial", "k_factor", "k_decay", "k_floor", "scale", "draw_margin")
+TOURNAMENT_KEYS = (
+    "schema_version",
+    "seed",
+    "repeats",
+    "model",
+    "weights",
+    "ratings",
+    "matches",
+)
+TOURNAMENT_RECORD_TYPES = ("meta", "config", "rating", "match")
+TOURNAMENT_COUNT_KEYS = ("ratings", "matches")
+
+
+def rubric_score_to_dict(score: RubricScore) -> dict[str, Any]:
+    """Encode a rubric score."""
+    return score.as_dict()
+
+
+def rubric_score_from_dict(payload: object, *, field: str = "score") -> RubricScore:
+    """Decode a rubric score, enforcing the ``[0, 1]`` bounds."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, RUBRIC_KEYS, field=field)
+    return RubricScore(
+        **{
+            name: require_float(mapping, name, field=field, minimum=0.0, maximum=1.0)
+            for name in RUBRIC_KEYS
+        }
+    )
+
+
+def rating_to_dict(rating: Rating) -> dict[str, Any]:
+    """Encode a rating exactly (no rounding) so replays stay identical."""
+    return {
+        "subject": rating.subject,
+        "elo": rating.elo,
+        "played": rating.played,
+        "wins": rating.wins,
+        "losses": rating.losses,
+        "draws": rating.draws,
+    }
+
+
+def rating_from_dict(payload: object, *, field: str = "rating") -> Rating:
+    """Decode a rating; the tally invariant is checked by the constructor."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, RATING_KEYS, field=field)
+    return Rating(
+        subject=require_str(mapping, "subject", field=field),
+        elo=require_float(mapping, "elo", field=field),
+        played=require_int(mapping, "played", field=field, minimum=0),
+        wins=require_int(mapping, "wins", field=field, minimum=0),
+        losses=require_int(mapping, "losses", field=field, minimum=0),
+        draws=require_int(mapping, "draws", field=field, minimum=0),
+    )
+
+
+def match_to_dict(match: MatchResult) -> dict[str, Any]:
+    """Encode one match of the audit trail."""
+    return {
+        "left": match.left,
+        "right": match.right,
+        "left_score": rubric_score_to_dict(match.left_score),
+        "right_score": rubric_score_to_dict(match.right_score),
+        "left_total": match.left_total,
+        "right_total": match.right_total,
+        "outcome": match.outcome,
+        "judge": match.judge,
+        "round_index": match.round_index,
+        "match_index": match.match_index,
+        "seed": match.seed,
+    }
+
+
+def match_from_dict(payload: object, *, field: str = "match") -> MatchResult:
+    """Decode one match of the audit trail."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, MATCH_KEYS, field=field)
+    return MatchResult(
+        left=require_str(mapping, "left", field=field),
+        right=require_str(mapping, "right", field=field),
+        left_score=rubric_score_from_dict(
+            present_value(mapping, "left_score", field=field),
+            field=f"{field}.left_score",
+        ),
+        right_score=rubric_score_from_dict(
+            present_value(mapping, "right_score", field=field),
+            field=f"{field}.right_score",
+        ),
+        left_total=require_float(
+            mapping, "left_total", field=field, minimum=0.0, maximum=1.0
+        ),
+        right_total=require_float(
+            mapping, "right_total", field=field, minimum=0.0, maximum=1.0
+        ),
+        outcome=require_float(
+            mapping, "outcome", field=field, minimum=0.0, maximum=1.0
+        ),
+        judge=require_str(mapping, "judge", field=field),
+        round_index=require_int(mapping, "round_index", field=field, minimum=0),
+        match_index=require_int(mapping, "match_index", field=field, minimum=0),
+        seed=require_int(mapping, "seed", field=field),
+    )
+
+
+def elo_model_to_dict(model: EloModel) -> dict[str, Any]:
+    """Encode the rating model settings."""
+    return {
+        "initial": model.initial,
+        "k_factor": model.k_factor,
+        "k_decay": model.k_decay,
+        "k_floor": model.k_floor,
+        "scale": model.scale,
+        "draw_margin": model.draw_margin,
+    }
+
+
+def elo_model_from_dict(payload: object, *, field: str = "model") -> EloModel:
+    """Decode the rating model settings."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, ELO_MODEL_KEYS, field=field)
+    return EloModel(
+        initial=require_float(mapping, "initial", field=field),
+        k_factor=require_float(mapping, "k_factor", field=field),
+        k_decay=require_float(mapping, "k_decay", field=field),
+        k_floor=require_float(mapping, "k_floor", field=field),
+        scale=require_float(mapping, "scale", field=field),
+        draw_margin=require_float(mapping, "draw_margin", field=field),
+    )
+
+
+def tournament_to_dict(result: TournamentResult) -> dict[str, Any]:
+    """Encode standings, configuration and the full audit trail."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "seed": result.config.seed,
+        "repeats": result.config.repeats,
+        "model": elo_model_to_dict(result.config.model),
+        "weights": result.config.weights.as_dict(),
+        "ratings": [rating_to_dict(rating) for rating in result.ratings],
+        "matches": [match_to_dict(match) for match in result.matches],
+    }
+
+
+def tournament_from_dict(
+    payload: object, *, field: str = "tournament"
+) -> TournamentResult:
+    """Decode a tournament result."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, TOURNAMENT_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    model = elo_model_from_dict(
+        present_value(mapping, "model", field=field), field=f"{field}.model"
+    )
+    weights_payload = require_mapping(
+        present_value(mapping, "weights", field=field), field=f"{field}.weights"
+    )
+    reject_unknown_keys(weights_payload, RUBRIC_KEYS, field=f"{field}.weights")
+    weights = RubricWeights(
+        **{
+            name: require_float(
+                weights_payload, name, field=f"{field}.weights", minimum=0.0
+            )
+            for name in RUBRIC_KEYS
+        }
+    )
+    config = TournamentConfig(
+        seed=require_int(mapping, "seed", field=field),
+        repeats=require_int(mapping, "repeats", field=field, minimum=1),
+        model=model,
+        weights=weights,
+    )
+    ratings = tuple(
+        rating_from_dict(item, field=f"{field}.ratings[{index}]")
+        for index, item in enumerate(
+            require_mapping_list(mapping, "ratings", field=field)
+        )
+    )
+    matches = tuple(
+        match_from_dict(item, field=f"{field}.matches[{index}]")
+        for index, item in enumerate(
+            require_mapping_list(mapping, "matches", field=field)
+        )
+    )
+    subjects = tuple(sorted({subject for match in matches for subject in match.pair()}))
+    if not subjects:
+        subjects = tuple(rating.subject for rating in ratings)
+    return TournamentResult(
+        subjects=subjects, ratings=ratings, matches=matches, config=config
+    )
+
+
+def tournament_signature(result: TournamentResult) -> str:
+    """Return a digest over the encoded tournament."""
+    return content_hash(tournament_to_dict(result))
+
+
+def tournament_to_lines(
+    result: TournamentResult, *, include_meta: bool = True
+) -> list[str]:
+    """Serialize a tournament as ordered JSONL lines: header, config, records."""
+    lines = (
+        [
+            meta_line(
+                {
+                    "ratings": len(result.ratings),
+                    "matches": len(result.matches),
+                },
+                tournament_signature(result),
+            )
+        ]
+        if include_meta
+        else []
+    )
+    lines.append(
+        dumps_line(
+            {
+                "record": "config",
+                "seed": result.config.seed,
+                "repeats": result.config.repeats,
+                "model": elo_model_to_dict(result.config.model),
+                "weights": result.config.weights.as_dict(),
+            }
+        )
+    )
+    lines.extend(
+        dumps_line({"record": "rating", "rating": rating_to_dict(rating)})
+        for rating in result.ratings
+    )
+    lines.extend(
+        dumps_line({"record": "match", "match": match_to_dict(match)})
+        for match in result.matches
+    )
+    return lines
+
+
+def tournament_from_lines(
+    lines: Iterable[str], *, verify_meta: bool = True
+) -> TournamentResult:
+    """Rebuild a tournament result from JSONL lines."""
+    config_payload: dict[str, Any] | None = None
+    ratings: list[Rating] = []
+    matches: list[MatchResult] = []
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="tournament", line_number=number)
+        record = require_str(payload, "record", field=f"tournament[{number}]")
+        if record not in TOURNAMENT_RECORD_TYPES:
+            raise SchemaError(
+                "unknown tournament record type",
+                field=f"tournament[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(TOURNAMENT_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"tournament[{number}]")
+            check_schema_version(
+                payload, field=f"tournament[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        elif record == "config":
+            reject_unknown_keys(
+                payload,
+                ("record", "seed", "repeats", "model", "weights"),
+                field=f"tournament[{number}]",
+            )
+            config_payload = payload
+        elif record == "rating":
+            ratings.append(
+                rating_from_dict(payload["rating"], field=f"tournament[{number}]")
+            )
+        else:
+            matches.append(
+                match_from_dict(payload["match"], field=f"tournament[{number}]")
+            )
+    if config_payload is None:
+        raise SchemaError("tournament document has no config line", field="tournament")
+    config = TournamentConfig(
+        seed=require_int(config_payload, "seed", field="tournament.config"),
+        repeats=require_int(
+            config_payload, "repeats", field="tournament.config", minimum=1
+        ),
+        model=elo_model_from_dict(
+            config_payload["model"], field="tournament.config.model"
+        ),
+        weights=RubricWeights(
+            **{name: float(config_payload["weights"][name]) for name in RUBRIC_KEYS}
+        ),
+    )
+    subjects = tuple(sorted({subject for match in matches for subject in match.pair()}))
+    if not subjects:
+        subjects = tuple(rating.subject for rating in ratings)
+    result = TournamentResult(
+        subjects=subjects,
+        ratings=tuple(ratings),
+        matches=tuple(matches),
+        config=config,
+    )
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts={"ratings": len(ratings), "matches": len(matches)},
+            signature=tournament_signature(result),
+            kind="tournament",
+            count_keys=TOURNAMENT_COUNT_KEYS,
+        )
+    return result

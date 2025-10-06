@@ -5,17 +5,22 @@ from __future__ import annotations
 import pytest
 
 from hypoarena.errors import (
+    ERROR_CODES,
     AdapterError,
+    ArtifactError,
+    ConfigError,
     CorpusError,
     DuplicateIdError,
     GraphInvariantError,
     HypoArenaError,
     ReplayExhaustedError,
     SchemaError,
+    SecretLeakError,
     SpanNotFoundError,
     TransportError,
     UnknownReferenceError,
     ValidationError,
+    error_for_code,
 )
 
 
@@ -93,3 +98,49 @@ def test_transport_error_defaults_are_inert() -> None:
     error = TransportError("connection reset")
     assert error.status is None
     assert error.attempts == 0
+
+
+def test_config_and_artifact_errors_have_distinct_exit_codes() -> None:
+    codes = {ConfigError("c").exit_code, ArtifactError("a").exit_code}
+    assert codes == {5, 6}
+
+
+def test_secret_leak_is_an_artifact_error() -> None:
+    assert issubclass(SecretLeakError, ArtifactError)
+    assert SecretLeakError("refused", field="api_key").code == "secret_leak"
+
+
+def test_every_registered_code_maps_back_to_its_class() -> None:
+    for code, cls in ERROR_CODES.items():
+        assert cls.code == code
+        assert error_for_code(code) is cls
+
+
+def test_registry_codes_are_unique() -> None:
+    classes = list(ERROR_CODES.values())
+    assert len(classes) == len(set(classes))
+
+
+def test_unknown_code_lookup_raises_a_structured_error() -> None:
+    with pytest.raises(UnknownReferenceError) as info:
+        error_for_code("not_a_real_code")
+    assert info.value.kind == "error code"
+
+
+def test_golden_registry_snapshot() -> None:
+    assert sorted(ERROR_CODES) == [
+        "adapter_error",
+        "artifact_error",
+        "config_error",
+        "corpus_error",
+        "duplicate_id",
+        "graph_invariant",
+        "hypoarena_error",
+        "replay_exhausted",
+        "schema_error",
+        "secret_leak",
+        "span_not_found",
+        "transport_error",
+        "unknown_reference",
+        "validation_error",
+    ]

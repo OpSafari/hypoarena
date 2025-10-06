@@ -110,3 +110,52 @@ class TransportError(AdapterError):
         super().__init__(message, status=status, attempts=attempts)
         self.status = status
         self.attempts = attempts
+
+
+class ConfigError(HypoArenaError):
+    """A run configuration was missing, malformed or internally inconsistent."""
+
+    code = "config_error"
+    exit_code = 5
+
+
+class ArtifactError(HypoArenaError):
+    """An artifact could not be read, written or validated."""
+
+    code = "artifact_error"
+    exit_code = 6
+
+
+class SecretLeakError(ArtifactError):
+    """Serialization refused to write a value that looks like a credential."""
+
+    code = "secret_leak"
+
+
+ERROR_CODES: dict[str, type[HypoArenaError]] = {
+    cls.code: cls
+    for cls in (
+        HypoArenaError,
+        ValidationError,
+        SchemaError,
+        DuplicateIdError,
+        UnknownReferenceError,
+        GraphInvariantError,
+        CorpusError,
+        SpanNotFoundError,
+        AdapterError,
+        ReplayExhaustedError,
+        TransportError,
+        ConfigError,
+        ArtifactError,
+        SecretLeakError,
+    )
+}
+
+
+def error_for_code(code: str) -> type[HypoArenaError]:
+    """Return the error class registered for ``code``."""
+    try:
+        return ERROR_CODES[code]
+    except KeyError:
+        raise UnknownReferenceError(code, "error code") from None

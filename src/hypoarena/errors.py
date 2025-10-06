@@ -71,3 +71,42 @@ class GraphInvariantError(ValidationError):
     """A graph operation would have broken a structural invariant."""
 
     code = "graph_invariant"
+
+
+class CorpusError(HypoArenaError):
+    """A corpus operation was asked for something the corpus cannot provide."""
+
+    code = "corpus_error"
+    exit_code = 3
+
+
+class SpanNotFoundError(CorpusError):
+    """A citation referenced a document span that is not in the corpus."""
+
+    code = "span_not_found"
+
+
+class AdapterError(HypoArenaError):
+    """An agent adapter could not produce a usable response."""
+
+    code = "adapter_error"
+    exit_code = 4
+
+
+class ReplayExhaustedError(AdapterError):
+    """A replay adapter ran out of recorded responses."""
+
+    code = "replay_exhausted"
+
+
+class TransportError(AdapterError):
+    """An HTTP adapter failed after exhausting its retry budget."""
+
+    code = "transport_error"
+
+    def __init__(
+        self, message: str, *, status: int | None = None, attempts: int = 0
+    ) -> None:
+        super().__init__(message, status=status, attempts=attempts)
+        self.status = status
+        self.attempts = attempts

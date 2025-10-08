@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from hypoarena.errors import SchemaError, ValidationError
 
 DEFAULT_HASH_LENGTH = 16
 MIN_HASH_LENGTH = 8
 MAX_HASH_LENGTH = 64
+ID_PREFIX_PATTERN = re.compile(r"[a-z]{2,8}")
+ID_PATTERN = re.compile(r"[a-z]{2,8}_[0-9a-f]{8,64}")
+DEFAULT_ID_LENGTH = 12
 
 
 def canonical_json(value: object) -> str:
@@ -69,3 +73,20 @@ def hash_parts(*parts: object, length: int = DEFAULT_HASH_LENGTH) -> str:
     ``hash_parts("a", "b")`` produce different digests.
     """
     return content_hash([canonical_json(part) for part in parts], length=length)
+
+
+def is_valid_id(value: str) -> bool:
+    """True when ``value`` looks like ``<prefix>_<hex digest>``."""
+    return isinstance(value, str) and ID_PATTERN.fullmatch(value) is not None
+
+
+def make_id(prefix: str, *parts: object, length: int = DEFAULT_ID_LENGTH) -> str:
+    """Build a deterministic identifier from ``prefix`` and the given parts."""
+    if not ID_PREFIX_PATTERN.fullmatch(prefix):
+        raise ValidationError(
+            "id prefix must be 2-8 lowercase ascii letters", prefix=prefix
+        )
+    identifier = f"{prefix}_{hash_parts(*parts, length=length)}"
+    if not is_valid_id(identifier):  # pragma: no cover - defensive
+        raise ValidationError("generated id is malformed", identifier=identifier)
+    return identifier

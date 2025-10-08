@@ -1,0 +1,52 @@
+"""Deterministic identifiers and content hashes.
+
+Every helper is a pure function of its arguments: no clock, no random state and
+no iteration order leaking into the result. Digests are therefore stable across
+processes and machines, which is what lets golden tests pin serialized hashes.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+from hypoarena.errors import SchemaError, ValidationError
+
+DEFAULT_HASH_LENGTH = 16
+MIN_HASH_LENGTH = 8
+MAX_HASH_LENGTH = 64
+
+
+def canonical_json(value: object) -> str:
+    """Serialize ``value`` to JSON with sorted keys and no insignificant spaces.
+
+    Non-JSON values (and NaN/inf floats, which have no portable representation)
+    raise :class:`~hypoarena.errors.SchemaError` instead of silently producing a
+    digest that could not be reproduced elsewhere.
+    """
+    try:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise SchemaError(
+            "value is not canonically serializable", reason=str(error)
+        ) from error
+
+
+def stable_hash(payload: str, *, length: int = DEFAULT_HASH_LENGTH) -> str:
+    """Return the first ``length`` hex characters of the SHA-256 of ``payload``."""
+    if not isinstance(payload, str):
+        raise SchemaError("hash payload must be a string", got=type(payload).__name__)
+    if not MIN_HASH_LENGTH <= length <= MAX_HASH_LENGTH:
+        raise ValidationError(
+            "hash length out of range",
+            length=length,
+            minimum=MIN_HASH_LENGTH,
+            maximum=MAX_HASH_LENGTH,
+        )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:length]

@@ -293,3 +293,76 @@ def signature_standard_error(num_perm: int) -> float:
     if num_perm < 1:
         raise ValidationError("num_perm must be >= 1", num_perm=num_perm)
     return 1.0 / math.sqrt(num_perm)
+
+
+def lsh_rows(num_perm: int, bands: int) -> int:
+    """Return the rows per band, requiring ``num_perm`` to divide evenly."""
+    if bands < 1:
+        raise ValidationError("bands must be >= 1", bands=bands)
+    if num_perm < 1:
+        raise ValidationError("num_perm must be >= 1", num_perm=num_perm)
+    if num_perm % bands:
+        raise ValidationError(
+            "num_perm must be divisible by bands", num_perm=num_perm, bands=bands
+        )
+    return num_perm // bands
+
+
+def lsh_bands(signature: Sequence[int], bands: int) -> tuple[tuple[int, ...], ...]:
+    """Split a signature into ``bands`` row tuples used as bucket keys."""
+    rows = lsh_rows(len(signature), bands)
+    return tuple(
+        tuple(signature[index * rows : (index + 1) * rows]) for index in range(bands)
+    )
+
+
+def candidate_pairs(
+    signatures: Mapping[str, tuple[int, ...]], bands: int
+) -> set[tuple[str, str]]:
+    """Return the pairs that share at least one band bucket.
+
+    LSH is a *filter*: every returned pair still has to be verified with the
+    configured similarity metric before it may join a cluster. The set contains
+    sorted identifier pairs, so downstream iteration is deterministic.
+    """
+    buckets: dict[tuple[int, tuple[int, ...]], list[str]] = {}
+    for identifier, signature in signatures.items():
+        for band_index, band in enumerate(lsh_bands(signature, bands)):
+            buckets.setdefault((band_index, band), []).append(identifier)
+    pairs: set[tuple[str, str]] = set()
+    for members in buckets.values():
+        if len(members) < 2:
+            continue
+        ordered = sorted(members)
+        for index, first in enumerate(ordered):
+            for second in ordered[index + 1 :]:
+                pairs.add((first, second))
+    return pairs
+
+
+def candidate_probability(similarity: float, num_perm: int, bands: int) -> float:
+    """Return the probability that a pair becomes an LSH candidate.
+
+    For similarity ``s``, ``b`` bands of ``r`` rows the standard S-curve applies:
+    ``1 - (1 - s**r)**b``. This is the formula behind the documented
+    false-positive/false-negative trade-off — pairs well above the inflection are
+    almost always proposed, pairs well below almost never are, and the transition
+    is where threshold tuning matters.
+    """
+    if not 0.0 <= similarity <= 1.0:
+        raise ValidationError(
+            "similarity must lie within [0, 1]", similarity=similarity
+        )
+    rows = lsh_rows(num_perm, bands)
+    return 1.0 - (1.0 - similarity**rows) ** bands
+
+
+def lsh_inflection(num_perm: int, bands: int) -> float:
+    """Return the similarity at which the S-curve is steepest.
+
+    ``(1 / bands) ** (1 / rows)`` is the usual rule of thumb for the threshold a
+    banding configuration approximates; choosing ``bands`` so this value matches
+    the intended threshold is how the trade-off is controlled.
+    """
+    rows = lsh_rows(num_perm, bands)
+    return (1.0 / bands) ** (1.0 / rows)

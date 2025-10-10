@@ -14,13 +14,19 @@ missed) around the ``threshold ≈ (1 / bands) ** (1 / rows)`` inflection.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
+from hypoarena.errors import (
+    ValidationError,
+)
 from hypoarena.ids import (
     content_hash,
 )
 from hypoarena.text import (
+    char_ngrams,
     normalize,
+    tokenize,
+    word_ngrams,
 )
 
 
@@ -54,3 +60,54 @@ def duplicate_rate(texts: Mapping[str, str]) -> float:
         return 0.0
     duplicated = sum(len(group) for group in exact_duplicates(texts))
     return duplicated / len(texts)
+
+
+def shingles(text: str, n: int, *, words: bool = False) -> frozenset[str]:
+    """Return the character or word n-gram set of a normalized text.
+
+    Character shingles are the default because they survive word-order changes
+    better than single tokens; word shingles (``words=True``) are what the TF-IDF
+    stage uses. Short texts fall back to the whole normalized string so that very
+    short inputs still compare equal to themselves.
+    """
+    if n < 1:
+        raise ValidationError("shingle size must be >= 1", n=n)
+    if words:
+        return frozenset(word_ngrams(tokenize(text), n))
+    return frozenset(char_ngrams(text, n))
+
+
+def jaccard_similarity(
+    left: str, right: str, *, n: int = 3, words: bool = False
+) -> float:
+    """Return the Jaccard index of two texts' shingle sets.
+
+    Two empty texts score ``1.0`` (they are the same nothing); an empty text
+    against a non-empty one scores ``0.0``.
+    """
+    first = shingles(left, n, words=words)
+    second = shingles(right, n, words=words)
+    if not first and not second:
+        return 1.0
+    if not first or not second:
+        return 0.0
+    return len(first & second) / len(first | second)
+
+
+def similarity_matrix(
+    texts: Sequence[str], *, n: int = 3, words: bool = False
+) -> list[list[float]]:
+    """Return the pairwise Jaccard matrix of a list of texts."""
+    sets = [shingles(text, n, words=words) for text in texts]
+    matrix: list[list[float]] = []
+    for first in sets:
+        row = []
+        for second in sets:
+            if not first and not second:
+                row.append(1.0)
+            elif not first or not second:
+                row.append(0.0)
+            else:
+                row.append(len(first & second) / len(first | second))
+        matrix.append(row)
+    return matrix

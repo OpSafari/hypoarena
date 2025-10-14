@@ -568,3 +568,155 @@ def cluster_metrics(
         false_positives=len(found - expected),
         false_negatives=len(expected - found),
     )
+
+
+def union_groups(
+    identifiers: Sequence[str], pairs: Iterable[tuple[str, str]]
+) -> list[list[str]]:
+    """Group identifiers by an equivalence relation given as pairs.
+
+    Union-find with path compression; groups are returned sorted by their first
+    member and members are sorted, so the output never depends on pair order.
+    """
+    parent = {identifier: identifier for identifier in identifiers}
+
+    def find(identifier: str) -> str:
+        while parent[identifier] != identifier:
+            parent[identifier] = parent[parent[identifier]]
+            identifier = parent[identifier]
+        return identifier
+
+    for left, right in pairs:
+        first, second = find(left), find(right)
+        if first != second:
+            parent[max(first, second)] = min(first, second)
+    groups: dict[str, list[str]] = {}
+    for identifier in identifiers:
+        groups.setdefault(find(identifier), []).append(identifier)
+    return [sorted(group) for group in sorted(groups.values(), key=min)]
+
+
+class DuplicateFinder:
+    """Finds duplicate groups with the metric chosen in the configuration.
+
+    For ``minhash`` the LSH filter proposes candidates and every candidate is
+    then verified with the actual MinHash estimate, so a band collision alone
+    never creates a cluster. ``exact`` skips verification because normalized
+    equality is already exact.
+    """
+
+    def __init__(self, config: DedupConfig | None = None) -> None:
+        self.config = config or DedupConfig()
+
+    def find(self, texts: Mapping[str, str]) -> tuple[DuplicateCluster, ...]:
+        """Return duplicate clusters, sorted by representative."""
+        identifiers = sorted(texts)
+        if len(identifiers) < 2:
+            return ()
+        method = self.config.method
+        if method == "exact":
+            verified = {
+                (left, right)
+                for group in exact_duplicates(texts)
+                for index, left in enumerate(group)
+                for right in group[index + 1 :]
+            }
+            scores: dict[tuple[str, str], float] = {pair: 1.0 for pair in verified}
+        elif method == "tfidf":
+            verified, scores = self._verify_tfidf(identifiers, texts)
+        else:
+            verified, scores = self._verify_signatures(identifiers, texts)
+        groups = union_groups(identifiers, sorted(verified))
+        clusters = []
+        for members in groups:
+            if len(members) < 2:
+                continue
+            similarities = tuple(
+                (left, right, scores[(left, right)])
+                for index, left in enumerate(members)
+                for right in members[index + 1 :]
+                if (left, right) in scores
+            )
+            clusters.append(
+                DuplicateCluster(
+                    members=tuple(members),
+                    representative=members[0],
+                    method=method,
+                    similarities=similarities,
+                )
+            )
+        return tuple(sorted(clusters, key=lambda cluster: cluster.representative))
+
+    def _candidate_pairs(
+        self, identifiers: Sequence[str], texts: Mapping[str, str]
+    ) -> set[tuple[str, str]]:
+        """Return the pairs worth comparing under the configured method."""
+        if self.config.method != "minhash" or not self.config.use_lsh:
+            return {
+                (left, right)
+                for index, left in enumerate(identifiers)
+                for right in identifiers[index + 1 :]
+            }
+        signatures = {
+            identifier: text_signature(
+                texts[identifier],
+                self.config.num_perm,
+                n=self.config.ngram_size,
+                seed=self.config.seed,
+            )
+            for identifier in identifiers
+        }
+        return candidate_pairs(signatures, self.config.bands)
+
+    def _verify_signatures(
+        self, identifiers: Sequence[str], texts: Mapping[str, str]
+    ) -> tuple[set[tuple[str, str]], dict[tuple[str, str], float]]:
+        """Verify candidate pairs with Jaccard or MinHash similarity."""
+        verified: set[tuple[str, str]] = set()
+        scores: dict[tuple[str, str], float] = {}
+        if self.config.method == "jaccard":
+            for left, right in self._candidate_pairs(identifiers, texts):
+                score = jaccard_similarity(
+                    texts[left],
+                    texts[right],
+                    n=self.config.ngram_size,
+                )
+                if score >= self.config.threshold:
+                    verified.add((left, right))
+                    scores[(left, right)] = score
+            return verified, scores
+        signatures = {
+            identifier: text_signature(
+                texts[identifier],
+                self.config.num_perm,
+                n=self.config.ngram_size,
+                seed=self.config.seed,
+            )
+            for identifier in identifiers
+        }
+        for left, right in self._candidate_pairs(identifiers, texts):
+            score = minhash_similarity(signatures[left], signatures[right])
+            if score >= self.config.threshold:
+                verified.add((left, right))
+                scores[(left, right)] = score
+        return verified, scores
+
+    def _verify_tfidf(
+        self, identifiers: Sequence[str], texts: Mapping[str, str]
+    ) -> tuple[set[tuple[str, str]], dict[tuple[str, str], float]]:
+        """Verify every pair with cosine similarity over TF-IDF vectors."""
+        vectorizer = TfidfVectorizer(
+            ngram_size=self.config.word_ngram_size,
+            min_document_frequency=self.config.min_document_frequency,
+        )
+        vectors = vectorizer.fit_transform([texts[item] for item in identifiers])
+        verified: set[tuple[str, str]] = set()
+        scores: dict[tuple[str, str], float] = {}
+        for index, left in enumerate(identifiers):
+            for right_index in range(index + 1, len(identifiers)):
+                right = identifiers[right_index]
+                score = cosine_similarity(vectors[index], vectors[right_index])
+                if score >= self.config.threshold:
+                    verified.add((left, right))
+                    scores[(left, right)] = score
+        return verified, scores

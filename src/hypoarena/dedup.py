@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from hypoarena.errors import (
+    DuplicateIdError,
     ValidationError,
 )
 from hypoarena.ids import (
@@ -720,3 +721,100 @@ class DuplicateFinder:
                     verified.add((left, right))
                     scores[(left, right)] = score
         return verified, scores
+
+
+@dataclass(frozen=True)
+class NoveltyVerdict:
+    """Whether a candidate text is new relative to what was already seen."""
+
+    is_novel: bool
+    nearest: str | None
+    similarity: float
+    method: str
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view for audit trails."""
+        return {
+            "is_novel": self.is_novel,
+            "nearest": self.nearest,
+            "similarity": round(self.similarity, 6),
+            "method": self.method,
+        }
+
+
+class NoveltyGuard:
+    """Tracks seen texts and rejects candidates that restate one of them.
+
+    The guard is what keeps an evolution loop from rediscovering the same
+    hypothesis under a new identifier: :meth:`admit` only records a candidate
+    when it is novel, so the seen set never grows with duplicates.
+    """
+
+    def __init__(self, config: DedupConfig | None = None) -> None:
+        self.config = config or DedupConfig()
+        self._seen: dict[str, str] = {}
+
+    @property
+    def size(self) -> int:
+        """How many distinct texts have been admitted."""
+        return len(self._seen)
+
+    def observe(self, identifier: str, text: str) -> None:
+        """Record a text unconditionally."""
+        if identifier in self._seen:
+            raise DuplicateIdError(identifier, "novelty entry")
+        self._seen[identifier] = text
+
+    def check(self, text: str) -> NoveltyVerdict:
+        """Return the closest seen text and whether the candidate is novel."""
+        if not self._seen:
+            return NoveltyVerdict(True, None, 0.0, self.config.method)
+        best_id: str | None = None
+        best_score = -1.0
+        for identifier, seen in sorted(self._seen.items()):
+            score = self._similarity(text, seen)
+            if score > best_score:
+                best_id, best_score = identifier, score
+        return NoveltyVerdict(
+            is_novel=best_score < self.config.threshold,
+            nearest=best_id,
+            similarity=max(0.0, best_score),
+            method=self.config.method,
+        )
+
+    def admit(self, identifier: str, text: str) -> NoveltyVerdict:
+        """Check a candidate and record it when it is novel."""
+        verdict = self.check(text)
+        if verdict.is_novel:
+            self.observe(identifier, text)
+        return verdict
+
+    def _similarity(self, left: str, right: str) -> float:
+        """Compare two texts with the configured metric."""
+        method = self.config.method
+        if method == "exact":
+            return (
+                1.0
+                if normalized_signature(left) == normalized_signature(right)
+                else 0.0
+            )
+        if method == "jaccard":
+            return jaccard_similarity(left, right, n=self.config.ngram_size)
+        if method == "tfidf":
+            vectorizer = TfidfVectorizer(ngram_size=self.config.word_ngram_size)
+            vectors = vectorizer.fit_transform([left, right])
+            return cosine_similarity(vectors[0], vectors[1])
+        return minhash_similarity(
+            text_signature(
+                left,
+                self.config.num_perm,
+                n=self.config.ngram_size,
+                seed=self.config.seed,
+            ),
+            text_signature(
+                right,
+                self.config.num_perm,
+                n=self.config.ngram_size,
+                seed=self.config.seed,
+            ),
+        )

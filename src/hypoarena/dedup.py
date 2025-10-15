@@ -395,6 +395,7 @@ class DedupConfig:
     bands: int = DEFAULT_BANDS
     min_document_frequency: int = 1
     use_lsh: bool = True
+    shingle_unit: str = "char"
     seed: int = 0
 
     def __post_init__(self) -> None:
@@ -416,12 +417,23 @@ class DedupConfig:
                 "min_document_frequency must be >= 1",
                 min_document_frequency=self.min_document_frequency,
             )
+        if self.shingle_unit not in SHINGLE_UNITS:
+            raise ValidationError(
+                "unknown shingle_unit",
+                shingle_unit=self.shingle_unit,
+                allowed=list(SHINGLE_UNITS),
+            )
         if self.use_lsh and self.num_perm % self.bands:
             raise ValidationError(
                 "num_perm must be divisible by bands when LSH is used",
                 num_perm=self.num_perm,
                 bands=self.bands,
             )
+
+    @property
+    def uses_words(self) -> bool:
+        """True when shingles are word n-grams rather than character n-grams."""
+        return self.shingle_unit == "word"
 
     @property
     def rows(self) -> int:
@@ -663,6 +675,7 @@ class DuplicateFinder:
                 texts[identifier],
                 self.config.num_perm,
                 n=self.config.ngram_size,
+                words=self.config.uses_words,
                 seed=self.config.seed,
             )
             for identifier in identifiers
@@ -681,6 +694,7 @@ class DuplicateFinder:
                     texts[left],
                     texts[right],
                     n=self.config.ngram_size,
+                    words=self.config.uses_words,
                 )
                 if score >= self.config.threshold:
                     verified.add((left, right))
@@ -691,6 +705,7 @@ class DuplicateFinder:
                 texts[identifier],
                 self.config.num_perm,
                 n=self.config.ngram_size,
+                words=self.config.uses_words,
                 seed=self.config.seed,
             )
             for identifier in identifiers
@@ -799,7 +814,12 @@ class NoveltyGuard:
                 else 0.0
             )
         if method == "jaccard":
-            return jaccard_similarity(left, right, n=self.config.ngram_size)
+            return jaccard_similarity(
+                left,
+                right,
+                n=self.config.ngram_size,
+                words=self.config.uses_words,
+            )
         if method == "tfidf":
             vectorizer = TfidfVectorizer(ngram_size=self.config.word_ngram_size)
             vectors = vectorizer.fit_transform([left, right])
@@ -809,12 +829,17 @@ class NoveltyGuard:
                 left,
                 self.config.num_perm,
                 n=self.config.ngram_size,
+                words=self.config.uses_words,
                 seed=self.config.seed,
             ),
             text_signature(
                 right,
                 self.config.num_perm,
                 n=self.config.ngram_size,
+                words=self.config.uses_words,
                 seed=self.config.seed,
             ),
         )
+
+
+SHINGLE_UNITS = ("char", "word")

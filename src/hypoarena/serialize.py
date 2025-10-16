@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +43,7 @@ from hypoarena.codec import (
 )
 from hypoarena.corpus import Corpus, Document
 from hypoarena.debate import Critique, DebateResult, DebateTurn
+from hypoarena.dedup import DedupConfig, DedupReport, DuplicateCluster
 from hypoarena.errors import ArtifactError, SchemaError
 from hypoarena.graph import ClaimEdge, GraphStats, HypothesisGraph
 from hypoarena.grounding import (
@@ -1910,3 +1911,200 @@ def tournament_from_lines(
             count_keys=TOURNAMENT_COUNT_KEYS,
         )
     return result
+
+
+DEDUP_CONFIG_KEYS = (
+    "method",
+    "threshold",
+    "ngram_size",
+    "word_ngram_size",
+    "num_perm",
+    "bands",
+    "min_document_frequency",
+    "use_lsh",
+    "shingle_unit",
+    "content_only",
+    "seed",
+)
+SIMILARITY_KEYS = ("left", "right", "score")
+DUPLICATE_CLUSTER_KEYS = (
+    "representative",
+    "method",
+    "members",
+    "similarities",
+)
+DEDUP_REPORT_KEYS = ("schema_version", "total", "config", "clusters")
+DEDUP_RECORD_TYPES = ("meta", "report")
+DEDUP_COUNT_KEYS = ("clusters", "members")
+
+
+def dedup_config_to_dict(config: DedupConfig) -> dict[str, Any]:
+    """Encode a dedup configuration."""
+    return asdict(config)
+
+
+def dedup_config_from_dict(payload: object, *, field: str = "config") -> DedupConfig:
+    """Decode a dedup configuration; the constructor validates every value."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, DEDUP_CONFIG_KEYS, field=field)
+    return DedupConfig(
+        method=require_str(mapping, "method", field=field),
+        threshold=require_float(
+            mapping, "threshold", field=field, minimum=0.0, maximum=1.0
+        ),
+        ngram_size=require_int(mapping, "ngram_size", field=field, minimum=1),
+        word_ngram_size=require_int(mapping, "word_ngram_size", field=field, minimum=1),
+        num_perm=require_int(mapping, "num_perm", field=field, minimum=1),
+        bands=require_int(mapping, "bands", field=field, minimum=1),
+        min_document_frequency=require_int(
+            mapping, "min_document_frequency", field=field, minimum=1
+        ),
+        use_lsh=require_bool(mapping, "use_lsh", field=field),
+        shingle_unit=require_str(mapping, "shingle_unit", field=field),
+        content_only=require_bool(mapping, "content_only", field=field),
+        seed=require_int(mapping, "seed", field=field),
+    )
+
+
+def similarity_to_dict(left: str, right: str, score: float) -> dict[str, Any]:
+    """Encode one verified pair similarity."""
+    return {"left": left, "right": right, "score": score}
+
+
+def duplicate_cluster_to_dict(cluster: DuplicateCluster) -> dict[str, Any]:
+    """Encode one duplicate cluster."""
+    return {
+        "representative": cluster.representative,
+        "method": cluster.method,
+        "members": list(cluster.members),
+        "similarities": [
+            similarity_to_dict(left, right, score)
+            for left, right, score in cluster.similarities
+        ],
+    }
+
+
+def duplicate_cluster_from_dict(
+    payload: object, *, field: str = "cluster"
+) -> DuplicateCluster:
+    """Decode one duplicate cluster."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, DUPLICATE_CLUSTER_KEYS, field=field)
+    similarities = []
+    for index, item in enumerate(
+        require_mapping_list(mapping, "similarities", field=field)
+    ):
+        entry_field = f"{field}.similarities[{index}]"
+        reject_unknown_keys(item, SIMILARITY_KEYS, field=entry_field)
+        similarities.append(
+            (
+                require_str(item, "left", field=entry_field),
+                require_str(item, "right", field=entry_field),
+                require_float(
+                    item, "score", field=entry_field, minimum=0.0, maximum=1.0
+                ),
+            )
+        )
+    return DuplicateCluster(
+        members=require_str_tuple(mapping, "members", field=field, minimum_items=2),
+        representative=require_str(mapping, "representative", field=field),
+        method=require_str(mapping, "method", field=field),
+        similarities=tuple(similarities),
+    )
+
+
+def dedup_report_to_dict(report: DedupReport) -> dict[str, Any]:
+    """Encode a dedup report with its configuration and clusters."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "total": report.total,
+        "config": dedup_config_to_dict(report.config),
+        "clusters": [duplicate_cluster_to_dict(cluster) for cluster in report.clusters],
+    }
+
+
+def dedup_report_from_dict(payload: object, *, field: str = "dedup") -> DedupReport:
+    """Decode a dedup report."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, DEDUP_REPORT_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    return DedupReport(
+        clusters=tuple(
+            duplicate_cluster_from_dict(item, field=f"{field}.clusters[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "clusters", field=field)
+            )
+        ),
+        config=dedup_config_from_dict(
+            present_value(mapping, "config", field=field), field=f"{field}.config"
+        ),
+        total=require_int(mapping, "total", field=field, minimum=0),
+    )
+
+
+def dedup_signature(report: DedupReport) -> str:
+    """Return a digest over the encoded report."""
+    return content_hash(dedup_report_to_dict(report))
+
+
+def dedup_counts(report: DedupReport) -> dict[str, int]:
+    """Return the counts stored in a dedup document header."""
+    return {"clusters": len(report.clusters), "members": report.duplicated}
+
+
+def dedup_report_to_lines(
+    report: DedupReport, *, include_meta: bool = True
+) -> list[str]:
+    """Serialize a dedup report as JSONL lines."""
+    lines = (
+        [meta_line(dedup_counts(report), dedup_signature(report))]
+        if include_meta
+        else []
+    )
+    lines.append(
+        dumps_line({"record": "report", "report": dedup_report_to_dict(report)})
+    )
+    return lines
+
+
+def dedup_report_from_lines(
+    lines: Iterable[str], *, verify_meta: bool = True
+) -> DedupReport:
+    """Rebuild a dedup report from JSONL lines."""
+    report: DedupReport | None = None
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="dedup", line_number=number)
+        record = require_str(payload, "record", field=f"dedup[{number}]")
+        if record not in DEDUP_RECORD_TYPES:
+            raise SchemaError(
+                "unknown dedup record type",
+                field=f"dedup[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(DEDUP_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"dedup[{number}]")
+            check_schema_version(
+                payload, field=f"dedup[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        else:
+            reject_unknown_keys(payload, ("record", "report"), field=f"dedup[{number}]")
+            report = dedup_report_from_dict(
+                payload["report"], field=f"dedup[{number}].report"
+            )
+    if report is None:
+        raise SchemaError("dedup document has no report line", field="dedup")
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts=dedup_counts(report),
+            signature=dedup_signature(report),
+            kind="dedup",
+            count_keys=DEDUP_COUNT_KEYS,
+        )
+    return report

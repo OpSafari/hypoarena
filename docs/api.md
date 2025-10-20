@@ -36,6 +36,7 @@
 | `hypoarena.http_agent` | 已实现 | OpenAI 兼容 HTTP 适配器（`HttpConfig`、`HttpAgent`、`ChatRequest`、`ChatResponse`），默认仅允许 loopback |
 | `hypoarena.debate` | 已实现 | 辩论循环与记录（`DebateLoop`、`DebateConfig`、`DebateResult`、`DebateTurn`、`corpus_context`、`apply_debate`），见 [debate.md](debate.md) |
 | `hypoarena.tournament` | 已实现 | rubric、Elo 模型、赛程与审计轨迹（`Tournament`、`TournamentConfig`、`EloModel`、`PlantedJudge`、`FeatureJudge`、`replay_ratings`），见 [tournament.md](tournament.md) |
+| `hypoarena.dedup` | 已实现 | 去重与新颖度（`DuplicateFinder`、`DedupConfig`、`DedupReport`、`NoveltyGuard`、`TfidfVectorizer`、`minhash_signature`、`candidate_pairs`），见 [dedup.md](dedup.md) |
 | `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
 
 记录字段与校验规则详见 [schema.md](schema.md)。后续模块（graph、corpus、

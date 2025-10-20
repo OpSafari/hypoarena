@@ -61,5 +61,6 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | `hypoarena.http_agent` | OpenAI 兼容 HTTP 客户端、重试策略与 loopback 保护 |
 | `hypoarena.debate` | propose/critique/revise 编排、收敛检测与转录记录 |
 | `hypoarena.tournament` | rubric 打分、成对赛程、Elo 更新与排序统计 |
+| `hypoarena.dedup` | 精确/Jaccard/TF-IDF/MinHash+LSH 去重、聚类与新颖度守卫 |
 
 模块表随实现推进补充；接口约定见 [api.md](api.md)。

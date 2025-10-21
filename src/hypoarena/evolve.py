@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+from random import Random
 
 from hypoarena.dedup import (
     DedupConfig,
@@ -23,12 +24,17 @@ from hypoarena.dedup import (
 from hypoarena.errors import (
     ValidationError,
 )
+from hypoarena.graph import (
+    HypothesisGraph,
+)
 from hypoarena.ids import (
+    content_hash,
     make_id,
 )
 from hypoarena.schema import (
     Citation,
     Claim,
+    ClaimRelation,
     Provenance,
     Scope,
     canonical_verb,
@@ -454,4 +460,197 @@ class NoveltyGate:
             statement=child.statement,
             nearest=verdict.nearest,
             similarity=verdict.similarity,
+        )
+
+
+CONDITION_POOL: tuple[str, ...] = (
+    "hypoxia",
+    "serum starvation",
+    "kinase inhibition",
+    "a 24 hour window",
+    "primary cells",
+)
+VARIABLE_POOL: tuple[str, ...] = (
+    "kinase K1",
+    "protein B",
+    "gene G2",
+    "metabolite M2",
+    "cell growth",
+    "apoptosis rate",
+)
+OPERATOR_EDGES: dict[str, ClaimRelation | None] = {
+    "narrow_scope": ClaimRelation.REFINES,
+    "substitute_variable": None,
+    "flip_relation": ClaimRelation.CONTRADICTS,
+    "crossover": None,
+    "decompose": ClaimRelation.ENTAILS,
+}
+
+
+@dataclass(frozen=True)
+class EvolutionStep:
+    """What one generation produced, accepted and refused."""
+
+    generation: int
+    accepted: tuple[EvolutionRecord, ...]
+    rejected: tuple[Rejection, ...]
+
+    def __post_init__(self) -> None:
+        if self.generation < 0:
+            raise ValidationError("generation must be >= 0", generation=self.generation)
+
+    @property
+    def child_ids(self) -> tuple[str, ...]:
+        """Identifiers added to the graph by this step."""
+        return tuple(record.child.claim_id for record in self.accepted)
+
+    @property
+    def accepted_count(self) -> int:
+        """How many candidates were kept."""
+        return len(self.accepted)
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready summary of the step."""
+        return {
+            "generation": self.generation,
+            "accepted": [record.as_dict() for record in self.accepted],
+            "rejected": [rejection.as_dict() for rejection in self.rejected],
+        }
+
+    def signature(self) -> str:
+        """Return a digest over the step, for run-to-run comparison."""
+        return content_hash(self.as_dict())
+
+
+class EvolutionEngine:
+    """Applies operators to a graph, gated by novelty, one generation at a time.
+
+    Candidate choice is driven by an explicitly seeded generator, so a run is
+    reproducible from ``(seed, generation, graph contents)`` alone. Every child
+    is inserted with the relation that matches its operator: a narrowed scope or
+    a decomposed conjunct *refines*/is *entailed by* its parent, a flipped
+    relation *contradicts* it, and substitutions or crossovers add provenance
+    without asserting an entailment they cannot justify.
+    """
+
+    def __init__(
+        self,
+        *,
+        seed: int = 0,
+        operators: Sequence[str] = OPERATORS,
+        per_operator: int = 1,
+        novelty_config: DedupConfig | None = None,
+    ) -> None:
+        for operator in operators:
+            check_operator(operator)
+        if not operators:
+            raise ValidationError("an evolution engine needs at least one operator")
+        if per_operator < 1:
+            raise ValidationError(
+                "per_operator must be >= 1", per_operator=per_operator
+            )
+        self.seed = seed
+        self.operators = tuple(operators)
+        self.per_operator = per_operator
+        self.novelty_config = novelty_config
+
+    def candidate(
+        self, operator: str, claims: Sequence[Claim], rng: Random
+    ) -> tuple[tuple[Claim, ...], Claim | None]:
+        """Build one candidate for an operator; the child may be ``None``."""
+        check_operator(operator)
+        if operator == "crossover":
+            if len(claims) < 2:
+                return (), None
+            first, second = rng.sample(list(claims), 2)
+            return (first, second), crossover(first, second, seed=self.seed)
+        parent = rng.choice(list(claims))
+        if operator == "narrow_scope":
+            return (parent,), narrow_scope(
+                parent, rng.choice(CONDITION_POOL), seed=self.seed
+            )
+        if operator == "substitute_variable":
+            slot = rng.choice(list(VARIABLE_SLOTS))
+            replacement = rng.choice(VARIABLE_POOL)
+            try:
+                child = substitute_variable(parent, slot, replacement, seed=self.seed)
+            except ValidationError:
+                return (parent,), None
+            return (parent,), child
+        if operator == "flip_relation":
+            return (parent,), flip_relation(parent, seed=self.seed)
+        children = decompose(parent, seed=self.seed)
+        return (parent,), children[0] if children else None
+
+    def insert(self, graph: HypothesisGraph, record: EvolutionRecord) -> Claim:
+        """Add a child claim and the relation its operator implies."""
+        graph.add_claim(record.child)
+        relation = OPERATOR_EDGES[record.operator]
+        if relation is not None:
+            for parent_id in record.parents:
+                if not graph.has_claim(parent_id):
+                    continue
+                if relation is ClaimRelation.CONTRADICTS and graph.has_edge(
+                    parent_id, record.child.claim_id, relation
+                ):
+                    continue
+                graph.add_edge(
+                    parent_id, record.child.claim_id, relation, note=record.operator
+                )
+        graph.validate()
+        return record.child
+
+    def step(self, graph: HypothesisGraph, generation: int) -> EvolutionStep:
+        """Run one generation over the graph, inserting accepted children."""
+        if generation < 0:
+            raise ValidationError("generation must be >= 0", generation=generation)
+        gate = NoveltyGate(self.novelty_config)
+        gate.preload(graph.claims)
+        rng = Random(f"hypoarena:evolve:{self.seed}:{generation}")
+        claims = list(graph.claims)
+        accepted: list[EvolutionRecord] = []
+        rejected: list[Rejection] = []
+        for operator in self.operators:
+            for _slot in range(self.per_operator):
+                if not claims:
+                    break
+                parents, child = self.candidate(operator, claims, rng)
+                identifiers = tuple(parent.claim_id for parent in parents)
+                if child is None:
+                    rejected.append(
+                        Rejection(
+                            operator,
+                            identifiers,
+                            "operator produced no child",
+                        )
+                    )
+                    continue
+                if graph.has_claim(child.claim_id):
+                    rejected.append(
+                        Rejection(
+                            operator,
+                            identifiers,
+                            "child already present",
+                            statement=child.statement,
+                        )
+                    )
+                    continue
+                outcome = gate.consider(operator, parents, child)
+                if isinstance(outcome, Rejection):
+                    rejected.append(outcome)
+                    continue
+                self.insert(graph, outcome)
+                accepted.append(outcome)
+                claims.append(outcome.child)
+        return EvolutionStep(generation, tuple(accepted), tuple(rejected))
+
+    def run(
+        self, graph: HypothesisGraph, generations: int
+    ) -> tuple[EvolutionStep, ...]:
+        """Run several generations, numbering them from the graph's current state."""
+        if generations < 1:
+            raise ValidationError("generations must be >= 1", generations=generations)
+        start = max((claim.provenance.generation for claim in graph.claims), default=0)
+        return tuple(
+            self.step(graph, start + index + 1) for index in range(generations)
         )

@@ -23,8 +23,10 @@ from hypoarena.ids import (
     make_id,
 )
 from hypoarena.schema import (
+    Citation,
     Claim,
     Provenance,
+    Scope,
     canonical_verb,
     opposite_relation,
 )
@@ -246,4 +248,69 @@ def flip_relation(claim: Claim, *, seed: int | None = None) -> Claim | None:
         statement=statement,
         relation=opposite,
         provenance=evolved_provenance("flip_relation", [claim], seed=seed),
+    )
+
+
+def shared_population(first: Claim, second: Claim) -> bool:
+    """True when two claims are about the same population."""
+    return normalize(first.scope.population) == normalize(second.scope.population)
+
+
+def shared_variables(first: Claim, second: Claim) -> frozenset[str]:
+    """Return the normalized variables the two claims have in common."""
+    left = {normalize(first.subject), normalize(first.object)}
+    right = {normalize(second.subject), normalize(second.object)}
+    return frozenset(left & right)
+
+
+def merge_citations(claims: Sequence[Claim]) -> tuple[Citation, ...]:
+    """Return the union of citations, deduplicated by span and kept in order."""
+    seen: set[tuple[str, int, int]] = set()
+    merged: list[Citation] = []
+    for claim in claims:
+        for citation in claim.citations:
+            if citation.key() in seen:
+                continue
+            seen.add(citation.key())
+            merged.append(citation)
+    return tuple(merged)
+
+
+def crossover(first: Claim, second: Claim, *, seed: int | None = None) -> Claim | None:
+    """Combine two parents into one child, or refuse when they are unrelated.
+
+    The child keeps the first parent's variables, relation and population, takes
+    a mechanism from whichever parent has one (preferring the second), and
+    carries the union of both scope conditions and both citation sets. Crossover
+    is refused when the parents share neither a variable nor a population, and
+    also when the combination would relate a variable to itself: merging
+    unrelated or degenerate claims would fabricate a hypothesis that follows
+    from neither parent.
+    """
+    if first.claim_id == second.claim_id:
+        return None
+    if not shared_variables(first, second) or not shared_population(first, second):
+        return None
+    if normalize(first.subject) == normalize(second.object):
+        # the child would relate a variable to itself; refuse instead of raising
+        return None
+    mechanism = second.mechanism or first.mechanism
+    conditions = tuple(
+        dict.fromkeys((*first.scope.conditions, *second.scope.conditions))
+    )
+    statement = f"{first.subject} {canonical_verb(first.relation)} {second.object}"
+    if mechanism:
+        statement = f"{statement} through {mechanism}"
+    return Claim(
+        claim_id=evolved_claim_id(
+            "crossover", (first.claim_id, second.claim_id), statement
+        ),
+        statement=statement,
+        subject=first.subject,
+        object=second.object,
+        relation=first.relation,
+        scope=Scope(population=first.scope.population, conditions=conditions),
+        citations=merge_citations((first, second)),
+        mechanism=mechanism,
+        provenance=evolved_provenance("crossover", [first, second], seed=seed),
     )

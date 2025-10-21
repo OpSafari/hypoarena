@@ -17,6 +17,7 @@ from hypoarena.synthetic import (
     draw_entities,
     draw_entity,
     pool_names,
+    relation_verbs,
     verb_for,
 )
 
@@ -37,6 +38,7 @@ def test_every_relation_has_several_verbs() -> None:
 def test_canonical_verb_is_the_first_listed_surface_form() -> None:
     for relation in PredictedRelation:
         assert canonical_verb(relation) == RELATION_VERBS[relation][0]
+        assert relation_verbs(relation)[0] == canonical_verb(relation)
 
 
 def test_sampling_is_seeded_and_distinct() -> None:

@@ -26,6 +26,9 @@ from hypoarena.schema import (
     Claim,
     Provenance,
 )
+from hypoarena.text import (
+    normalize,
+)
 
 OPERATORS: tuple[str, ...] = (
     "narrow_scope",
@@ -161,3 +164,47 @@ def narrow_scope(claim: Claim, condition: str, *, seed: int | None = None) -> Cl
             "narrowing did not produce a stricter scope", claim_id=claim.claim_id
         )
     return child
+
+
+def substitute_variable(
+    claim: Claim, slot: str, replacement: str, *, seed: int | None = None
+) -> Claim:
+    """Return a child claim with one variable replaced.
+
+    Substitution models the "does this hold for a related variable?" question —
+    a paralogue, an isoform, a different readout. The statement is rewritten only
+    when it mentions the replaced variable verbatim, so a child never carries a
+    statement that contradicts its own variables.
+    """
+    if slot not in VARIABLE_SLOTS:
+        raise ValidationError(
+            "unknown variable slot", slot=slot, allowed=list(VARIABLE_SLOTS)
+        )
+    if not replacement.strip():
+        raise ValidationError("replacement variable must not be blank")
+    original = getattr(claim, slot)
+    if normalize(original) == normalize(replacement):
+        raise ValidationError(
+            "substitution must change the variable",
+            slot=slot,
+            value=replacement,
+        )
+    statement = claim.statement
+    if original.lower() in statement.lower():
+        start = statement.lower().index(original.lower())
+        statement = statement[:start] + replacement + statement[start + len(original) :]
+    # A substitution that would make the claim self-referential is rejected by
+    # the Claim constructor itself ("subject and object must differ"), so there
+    # is no separate check here to fall out of sync with the schema.
+    return replace(
+        claim,
+        claim_id=evolved_claim_id(
+            "substitute_variable",
+            (claim.claim_id,),
+            statement,
+            extra=f"{slot}:{replacement}",
+        ),
+        statement=statement,
+        provenance=evolved_provenance("substitute_variable", [claim], seed=seed),
+        **{slot: replacement},
+    )

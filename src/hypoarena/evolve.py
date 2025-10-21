@@ -32,6 +32,7 @@ from hypoarena.schema import (
 )
 from hypoarena.text import (
     normalize,
+    normalize_whitespace,
 )
 
 OPERATORS: tuple[str, ...] = (
@@ -314,3 +315,58 @@ def crossover(first: Claim, second: Claim, *, seed: int | None = None) -> Claim 
         mechanism=mechanism,
         provenance=evolved_provenance("crossover", [first, second], seed=seed),
     )
+
+
+SPLIT_MARKERS: tuple[str, ...] = (" and ", "; ", " as well as ")
+
+
+def split_statement(statement: str) -> tuple[str, ...]:
+    """Split a compound statement into its conjuncts.
+
+    The heuristic is deliberately simple and documented: split on ``and``,
+    ``;`` and ``as well as``. It does not understand subordination, so a
+    statement like "A binds B and thereby increases C" yields two parts of
+    unequal usefulness — which is why every child keeps the parent's citations
+    and has to be re-verified rather than trusted.
+    """
+    parts = [statement.strip()]
+    for marker in SPLIT_MARKERS:
+        expanded: list[str] = []
+        for part in parts:
+            expanded.extend(normalize_whitespace(piece) for piece in part.split(marker))
+        parts = expanded
+    return tuple(part for part in parts if part)
+
+
+def decompose(claim: Claim, *, seed: int | None = None) -> tuple[Claim, ...]:
+    """Split a compound claim into one child per conjunct.
+
+    Children inherit the parent's variables, relation, scope and citations; only
+    the statement changes. Fewer than two usable conjuncts means there is
+    nothing to decompose, and an empty tuple is returned rather than a copy of
+    the parent.
+    """
+    parts = split_statement(claim.statement)
+    if len(parts) < 2:
+        return ()
+    children: list[Claim] = []
+    seen: set[str] = set()
+    whole = normalize(claim.statement)
+    for index, part in enumerate(parts):
+        key = normalize(part)
+        # a conjunct that repeats the whole statement, or repeats an earlier
+        # conjunct, would only add a duplicate claim
+        if key == whole or key in seen:
+            continue
+        seen.add(key)
+        children.append(
+            replace(
+                claim,
+                claim_id=evolved_claim_id(
+                    "decompose", (claim.claim_id,), part, extra=index
+                ),
+                statement=part,
+                provenance=evolved_provenance("decompose", [claim], seed=seed),
+            )
+        )
+    return tuple(children) if len(children) >= 2 else ()

@@ -13,9 +13,13 @@ the engine re-validates the graph after inserting a child. The property tests in
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 
+from hypoarena.dedup import (
+    DedupConfig,
+    NoveltyGuard,
+)
 from hypoarena.errors import (
     ValidationError,
 )
@@ -370,3 +374,84 @@ def decompose(claim: Claim, *, seed: int | None = None) -> tuple[Claim, ...]:
             )
         )
     return tuple(children) if len(children) >= 2 else ()
+
+
+def rationale_for(operator: str, parents: Sequence[Claim], child: Claim) -> str:
+    """Explain what an operator changed, in words a report can print."""
+    check_operator(operator)
+    first = parents[0]
+    if operator == "narrow_scope":
+        added = [
+            condition
+            for condition in child.scope.conditions
+            if condition not in first.scope.conditions
+        ]
+        return f"scope narrowed by {', '.join(added) or 'an existing condition'}"
+    if operator == "substitute_variable":
+        for slot in VARIABLE_SLOTS:
+            before = getattr(first, slot)
+            after = getattr(child, slot)
+            if before != after:
+                return f"{slot} changed from {before!r} to {after!r}"
+        return "variables restated"
+    if operator == "flip_relation":
+        return f"relation flipped from {first.relation.value} to {child.relation.value}"
+    if operator == "crossover":
+        second = parents[1]
+        return (
+            f"combined {first.subject!r} from the first parent with "
+            f"{second.object!r} from the second"
+        )
+    return f"split a compound statement into {len(child.statement.split())} words"
+
+
+class NoveltyGate:
+    """Keeps evolved claims only when they say something not seen before.
+
+    The gate wraps a :class:`~hypoarena.dedup.NoveltyGuard` over normalized
+    statements. A candidate that is too similar to an existing claim is refused
+    with the nearest match and its score, which is what makes the rejection
+    auditable instead of mysterious.
+    """
+
+    def __init__(self, config: DedupConfig | None = None) -> None:
+        self.config = config or DedupConfig(
+            method="jaccard",
+            threshold=0.9,
+            ngram_size=1,
+            shingle_unit="word",
+            content_only=True,
+        )
+        self.guard = NoveltyGuard(self.config)
+
+    def preload(self, claims: Iterable[Claim]) -> int:
+        """Seed the guard with existing claims; return how many were added."""
+        added = 0
+        for claim in claims:
+            if self.guard.has(claim.claim_id):
+                continue
+            self.guard.observe(claim.claim_id, claim.normalized_statement())
+            added += 1
+        return added
+
+    def consider(
+        self, operator: str, parents: Sequence[Claim], child: Claim
+    ) -> EvolutionRecord | Rejection:
+        """Accept a candidate as a record, or refuse it with a reason."""
+        verdict = self.guard.admit(child.claim_id, child.normalized_statement())
+        identifiers = tuple(parent.claim_id for parent in parents)
+        if verdict.is_novel:
+            return EvolutionRecord(
+                operator=operator,
+                parents=identifiers,
+                child=child,
+                rationale=rationale_for(operator, parents, child),
+            )
+        return Rejection(
+            operator=operator,
+            parents=identifiers,
+            reason="not novel",
+            statement=child.statement,
+            nearest=verdict.nearest,
+            similarity=verdict.similarity,
+        )

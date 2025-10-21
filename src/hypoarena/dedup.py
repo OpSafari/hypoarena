@@ -798,6 +798,10 @@ class NoveltyGuard:
         """How many distinct texts have been admitted."""
         return len(self._seen)
 
+    def has(self, identifier: str) -> bool:
+        """True when an identifier was already observed."""
+        return identifier in self._seen
+
     def observe(self, identifier: str, text: str) -> None:
         """Record a text unconditionally."""
         if identifier in self._seen:

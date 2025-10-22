@@ -45,6 +45,7 @@ from hypoarena.corpus import Corpus, Document
 from hypoarena.debate import Critique, DebateResult, DebateTurn
 from hypoarena.dedup import DedupConfig, DedupReport, DuplicateCluster
 from hypoarena.errors import ArtifactError, SchemaError
+from hypoarena.evolve import EvolutionRecord, EvolutionStep, Rejection
 from hypoarena.graph import ClaimEdge, GraphStats, HypothesisGraph
 from hypoarena.grounding import (
     CitationCheck,
@@ -2108,3 +2109,176 @@ def dedup_report_from_lines(
             count_keys=DEDUP_COUNT_KEYS,
         )
     return report
+
+
+EVOLUTION_RECORD_KEYS = ("operator", "parents", "child", "rationale")
+REJECTION_KEYS = (
+    "operator",
+    "parents",
+    "reason",
+    "statement",
+    "nearest",
+    "similarity",
+)
+EVOLUTION_STEP_KEYS = ("schema_version", "generation", "accepted", "rejected")
+EVOLUTION_RECORD_TYPES = ("meta", "step")
+EVOLUTION_COUNT_KEYS = ("steps", "accepted", "rejected")
+
+
+def rejection_to_dict(rejection: Rejection) -> dict[str, Any]:
+    """Encode one refused candidate."""
+    return {
+        "operator": rejection.operator,
+        "parents": list(rejection.parents),
+        "reason": rejection.reason,
+        "statement": rejection.statement,
+        "nearest": rejection.nearest,
+        "similarity": rejection.similarity,
+    }
+
+
+def rejection_from_dict(payload: object, *, field: str = "rejection") -> Rejection:
+    """Decode one refused candidate."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, REJECTION_KEYS, field=field)
+    return Rejection(
+        operator=require_str(mapping, "operator", field=field),
+        parents=require_str_tuple(mapping, "parents", field=field),
+        reason=require_str(mapping, "reason", field=field),
+        statement=require_str(mapping, "statement", field=field, allow_empty=True),
+        nearest=optional_str(mapping, "nearest", field=field),
+        similarity=require_float(
+            mapping, "similarity", field=field, minimum=0.0, maximum=1.0
+        ),
+    )
+
+
+def evolution_record_to_dict(record: EvolutionRecord) -> dict[str, Any]:
+    """Encode one accepted evolution, embedding the child claim."""
+    return {
+        "operator": record.operator,
+        "parents": list(record.parents),
+        "child": claim_to_dict(record.child),
+        "rationale": record.rationale,
+    }
+
+
+def evolution_record_from_dict(
+    payload: object, *, field: str = "record"
+) -> EvolutionRecord:
+    """Decode one accepted evolution."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, EVOLUTION_RECORD_KEYS, field=field)
+    return EvolutionRecord(
+        operator=require_str(mapping, "operator", field=field),
+        parents=require_str_tuple(mapping, "parents", field=field, minimum_items=1),
+        child=claim_from_dict(
+            present_value(mapping, "child", field=field), field=f"{field}.child"
+        ),
+        rationale=require_str(mapping, "rationale", field=field),
+    )
+
+
+def evolution_step_to_dict(step: EvolutionStep) -> dict[str, Any]:
+    """Encode one generation."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generation": step.generation,
+        "accepted": [evolution_record_to_dict(item) for item in step.accepted],
+        "rejected": [rejection_to_dict(item) for item in step.rejected],
+    }
+
+
+def evolution_step_from_dict(payload: object, *, field: str = "step") -> EvolutionStep:
+    """Decode one generation."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, EVOLUTION_STEP_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    return EvolutionStep(
+        generation=require_int(mapping, "generation", field=field, minimum=0),
+        accepted=tuple(
+            evolution_record_from_dict(item, field=f"{field}.accepted[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "accepted", field=field)
+            )
+        ),
+        rejected=tuple(
+            rejection_from_dict(item, field=f"{field}.rejected[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "rejected", field=field)
+            )
+        ),
+    )
+
+
+def evolution_signature(steps: Sequence[EvolutionStep]) -> str:
+    """Return a digest over a sequence of generations."""
+    return content_hash([evolution_step_to_dict(step) for step in steps])
+
+
+def evolution_counts(steps: Sequence[EvolutionStep]) -> dict[str, int]:
+    """Return the counts stored in an evolution document header."""
+    return {
+        "steps": len(steps),
+        "accepted": sum(len(step.accepted) for step in steps),
+        "rejected": sum(len(step.rejected) for step in steps),
+    }
+
+
+def evolution_to_lines(
+    steps: Sequence[EvolutionStep], *, include_meta: bool = True
+) -> list[str]:
+    """Serialize generations as ordered JSONL lines."""
+    lines = (
+        [meta_line(evolution_counts(steps), evolution_signature(steps))]
+        if include_meta
+        else []
+    )
+    lines.extend(
+        dumps_line({"record": "step", "step": evolution_step_to_dict(step)})
+        for step in steps
+    )
+    return lines
+
+
+def evolution_from_lines(
+    lines: Iterable[str], *, verify_meta: bool = True
+) -> tuple[EvolutionStep, ...]:
+    """Rebuild generations from JSONL lines."""
+    steps: list[EvolutionStep] = []
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="evolution", line_number=number)
+        record = require_str(payload, "record", field=f"evolution[{number}]")
+        if record not in EVOLUTION_RECORD_TYPES:
+            raise SchemaError(
+                "unknown evolution record type",
+                field=f"evolution[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(EVOLUTION_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"evolution[{number}]")
+            check_schema_version(
+                payload, field=f"evolution[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        else:
+            reject_unknown_keys(
+                payload, ("record", "step"), field=f"evolution[{number}]"
+            )
+            steps.append(
+                evolution_step_from_dict(payload["step"], field=f"evolution[{number}]")
+            )
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts=evolution_counts(steps),
+            signature=evolution_signature(steps),
+            kind="evolution",
+            count_keys=EVOLUTION_COUNT_KEYS,
+        )
+    return tuple(steps)

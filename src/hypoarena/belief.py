@@ -107,3 +107,67 @@ class LikelihoodModel:
     def fingerprint(self) -> str:
         """Return a digest of the model for run metadata."""
         return content_hash(asdict(self))
+
+
+@dataclass(frozen=True)
+class BeliefState:
+    """The accumulated belief in one claim, with the audit counts behind it."""
+
+    claim_id: str
+    prior: float
+    posterior: float
+    likelihood_ratio: float
+    supporting: int = 0
+    refuting: int = 0
+    neutral: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.claim_id.strip():
+            raise ValidationError("belief state needs a claim id")
+        check_probability(self.prior, name="prior")
+        check_probability(self.posterior, name="posterior")
+        if self.likelihood_ratio <= 0:
+            raise ValidationError(
+                "likelihood_ratio must be > 0", likelihood_ratio=self.likelihood_ratio
+            )
+        for name in ("supporting", "refuting", "neutral"):
+            if getattr(self, name) < 0:
+                raise ValidationError(
+                    f"{name} must be >= 0", **{name: getattr(self, name)}
+                )
+
+    @property
+    def updates(self) -> int:
+        """How many evidence items were folded in."""
+        return self.supporting + self.refuting + self.neutral
+
+    @property
+    def odds(self) -> float:
+        """Posterior odds."""
+        return to_odds(self.posterior)
+
+    @property
+    def movement(self) -> float:
+        """Signed change from prior to posterior."""
+        return self.posterior - self.prior
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view for reports and artifacts."""
+        return {
+            "claim_id": self.claim_id,
+            "prior": round(self.prior, 6),
+            "posterior": round(self.posterior, 6),
+            "likelihood_ratio": round(self.likelihood_ratio, 6),
+            "supporting": self.supporting,
+            "refuting": self.refuting,
+            "neutral": self.neutral,
+            "movement": round(self.movement, 6),
+        }
+
+
+def update_belief(prior: float, ratio: float) -> float:
+    """Apply one likelihood ratio to a probability and clamp the result."""
+    check_probability(prior, name="prior")
+    if ratio <= 0:
+        raise ValidationError("likelihood ratio must be > 0", ratio=ratio)
+    return clamp_probability(from_odds(to_odds(prior) * ratio))

@@ -26,3 +26,41 @@ def fold_accents(text: str) -> str:
     """
     decomposed = unicodedata.normalize("NFKD", text)
     return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
+PUNCTUATION_PATTERN = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def strip_punctuation(text: str) -> str:
+    """Replace punctuation with spaces so hyphenated compounds become tokens.
+
+    ``"state-of-the-art"`` becomes ``"state of the art"``; the replacement is a
+    space rather than nothing so that adjacent words are never merged.
+    """
+    return PUNCTUATION_PATTERN.sub(" ", text)
+
+
+def normalize(
+    text: str,
+    *,
+    lower: bool = True,
+    remove_punctuation: bool = True,
+    fold: bool = True,
+    collapse_whitespace: bool = True,
+) -> str:
+    """Apply the standard normalization chain used across the toolkit.
+
+    Order matters: accents are folded before case folding (``casefold`` expands
+    ``ß`` to ``ss``), punctuation becomes spaces before whitespace collapsing so
+    the result never contains double spaces.
+    """
+    result = text
+    if fold:
+        result = fold_accents(result)
+    if lower:
+        result = result.casefold()
+    if remove_punctuation:
+        result = strip_punctuation(result)
+    if collapse_whitespace:
+        result = normalize_whitespace(result)
+    return result

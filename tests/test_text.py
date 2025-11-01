@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from hypoarena.text import (
+    STOPWORDS,
+    content_tokens,
     fold_accents,
     normalize,
     normalize_whitespace,
     strip_punctuation,
+    tokenize,
 )
 
 
@@ -64,3 +67,33 @@ def test_normalize_is_idempotent_with_default_flags() -> None:
 
 def test_normalize_without_folding_keeps_accents() -> None:
     assert normalize("café", fold=False) == "café"
+
+
+def test_tokenize_splits_on_punctuation_and_whitespace() -> None:
+    assert tokenize("Gene A binds gene-B!") == ["gene", "a", "binds", "gene", "b"]
+
+
+def test_tokenize_keeps_alphanumeric_terms_together() -> None:
+    assert tokenize("IL6 and p53 levels") == ["il6", "and", "p53", "levels"]
+
+
+def test_tokenize_returns_empty_list_for_punctuation_only() -> None:
+    assert tokenize("!!! --- ...") == []
+
+
+def test_content_tokens_drops_stopwords_but_keeps_order() -> None:
+    assert content_tokens("the protein binds to the receptor") == [
+        "protein",
+        "binds",
+        "receptor",
+    ]
+
+
+def test_content_tokens_keeps_every_token_when_there_are_no_stopwords() -> None:
+    text = "kinase phosphorylates substrate"
+    assert content_tokens(text) == tokenize(text)
+
+
+def test_stopword_list_is_lowercase_and_unique() -> None:
+    assert all(word == word.casefold() for word in STOPWORDS)
+    assert "the" in STOPWORDS and "protein" not in STOPWORDS

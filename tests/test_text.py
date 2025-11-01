@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import pytest
+
+from hypoarena.errors import ValidationError
 from hypoarena.text import (
     STOPWORDS,
+    char_ngrams,
     content_tokens,
     fold_accents,
     normalize,
     normalize_whitespace,
     strip_punctuation,
     tokenize,
+    word_ngrams,
 )
 
 
@@ -97,3 +102,36 @@ def test_content_tokens_keeps_every_token_when_there_are_no_stopwords() -> None:
 def test_stopword_list_is_lowercase_and_unique() -> None:
     assert all(word == word.casefold() for word in STOPWORDS)
     assert "the" in STOPWORDS and "protein" not in STOPWORDS
+
+
+def test_char_ngrams_slide_over_the_compact_text() -> None:
+    assert char_ngrams("abc", 2) == ["ab", "bc"]
+    assert char_ngrams("a b", 2) == ["ab"]
+
+
+def test_char_ngrams_handle_short_and_empty_inputs() -> None:
+    assert char_ngrams("ab", 5) == ["ab"]
+    assert char_ngrams("", 3) == []
+    assert char_ngrams("!!!", 3) == []
+
+
+def test_char_ngrams_unigram_matches_compact_characters() -> None:
+    assert char_ngrams("a b", 1) == ["a", "b"]
+
+
+def test_word_ngrams_join_tokens_with_single_spaces() -> None:
+    assert word_ngrams(["a", "b", "c"], 2) == ["a b", "b c"]
+    assert word_ngrams(["a", "b", "c"], 3) == ["a b c"]
+
+
+def test_word_ngrams_handle_short_and_empty_inputs() -> None:
+    assert word_ngrams(["a"], 2) == ["a"]
+    assert word_ngrams([], 2) == []
+
+
+@pytest.mark.parametrize("size", [0, -1])
+def test_ngram_builders_reject_non_positive_sizes(size: int) -> None:
+    with pytest.raises(ValidationError):
+        char_ngrams("abc", size)
+    with pytest.raises(ValidationError):
+        word_ngrams(["a", "b"], size)

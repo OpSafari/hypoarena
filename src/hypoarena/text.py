@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
+
+from hypoarena.errors import ValidationError
 
 WHITESPACE_PATTERN = re.compile(r"\s+")
 
@@ -205,3 +208,37 @@ def tokenize(text: str) -> list[str]:
 def content_tokens(text: str) -> list[str]:
     """Return tokens with English stopwords removed, preserving order."""
     return [token for token in tokenize(text) if token not in STOPWORDS]
+
+
+def char_ngrams(text: str, n: int) -> list[str]:
+    """Return character n-grams of the normalized text with whitespace removed.
+
+    Whitespace is dropped first so that reflowing a sentence does not change its
+    shingles. Strings shorter than ``n`` yield the whole string as a single gram
+    (and the empty string yields nothing), which keeps similarity measures
+    defined for very short inputs.
+    """
+    if n < 1:
+        raise ValidationError("n-gram size must be >= 1", n=n)
+    compact = normalize(text).replace(" ", "")
+    if not compact:
+        return []
+    if len(compact) < n:
+        return [compact]
+    return [compact[index : index + n] for index in range(len(compact) - n + 1)]
+
+
+def word_ngrams(tokens: Sequence[str], n: int) -> list[str]:
+    """Return word n-grams joined by single spaces.
+
+    Mirrors :func:`char_ngrams` for short inputs: fewer tokens than ``n`` yields
+    one gram holding all tokens, an empty sequence yields nothing.
+    """
+    if n < 1:
+        raise ValidationError("n-gram size must be >= 1", n=n)
+    words = list(tokens)
+    if not words:
+        return []
+    if len(words) < n:
+        return [" ".join(words)]
+    return [" ".join(words[index : index + n]) for index in range(len(words) - n + 1)]

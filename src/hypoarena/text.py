@@ -282,3 +282,49 @@ def sentence_split(text: str) -> list[str]:
         for part in SENTENCE_BOUNDARY_PATTERN.split(collapsed)
         if part.strip()
     ]
+
+
+NEGATION_CUES = frozenset(
+    {
+        "arent",
+        "cannot",
+        "couldnt",
+        "didnt",
+        "doesnt",
+        "dont",
+        "fail",
+        "failed",
+        "fails",
+        "isnt",
+        "lack",
+        "lacked",
+        "lacks",
+        "neither",
+        "never",
+        "no",
+        "nor",
+        "not",
+        "nothing",
+        "shouldnt",
+        "wasnt",
+        "werent",
+        "without",
+        "wont",
+        "wouldnt",
+    }
+)
+
+
+def has_negation(tokens: Sequence[str]) -> bool:
+    """True when any token is a grammatical negation cue.
+
+    Tokens are expected to be normalized (apostrophes removed), so the cue list
+    contains forms such as ``doesnt``. This is a coarse polarity signal: it
+    detects that a statement is negated, not what scope the negation takes.
+    """
+    return any(token in NEGATION_CUES for token in tokens)
+
+
+def negation_flip(first: str, second: str) -> bool:
+    """True when exactly one of the two statements carries a negation cue."""
+    return has_negation(tokenize(first)) != has_negation(tokenize(second))

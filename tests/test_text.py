@@ -6,11 +6,14 @@ import pytest
 
 from hypoarena.errors import ValidationError
 from hypoarena.text import (
+    NEGATION_CUES,
     STOPWORDS,
     char_ngrams,
     content_tokens,
     extract_numbers,
     fold_accents,
+    has_negation,
+    negation_flip,
     normalize,
     normalize_whitespace,
     sentence_split,
@@ -206,3 +209,25 @@ def test_strip_punctuation_leaves_trailing_apostrophes_alone() -> None:
 
 def test_tokenize_yields_one_token_per_contraction() -> None:
     assert tokenize("Binding doesn't occur") == ["binding", "doesnt", "occur"]
+
+
+def test_has_negation_detects_cues_in_normalized_tokens() -> None:
+    assert has_negation(tokenize("Binding does not occur.")) is True
+    assert has_negation(tokenize("The assay doesn't replicate")) is True
+
+
+def test_has_negation_is_false_for_positive_statements() -> None:
+    assert has_negation(tokenize("Binding occurs in a dose dependent way")) is False
+    assert has_negation([]) is False
+
+
+def test_negation_flip_is_true_only_when_polarity_differs() -> None:
+    assert negation_flip("A binds B", "A does not bind B") is True
+    assert negation_flip("A binds B", "A binds B strongly") is False
+    assert negation_flip("A fails to bind B", "A does not bind B") is False
+
+
+def test_negation_cues_are_normalized_forms() -> None:
+    assert "doesnt" in NEGATION_CUES
+    assert "doesn't" not in NEGATION_CUES
+    assert all(cue == normalize(cue) for cue in NEGATION_CUES)

@@ -32,15 +32,18 @@ def fold_accents(text: str) -> str:
 
 
 PUNCTUATION_PATTERN = re.compile(r"[^\w\s]", re.UNICODE)
+APOSTROPHE_PATTERN = re.compile(r"(?<=\w)['\u2019](?=\w)")
 
 
 def strip_punctuation(text: str) -> str:
-    """Replace punctuation with spaces so hyphenated compounds become tokens.
+    """Drop intra-word apostrophes, then replace other punctuation with spaces.
 
-    ``"state-of-the-art"`` becomes ``"state of the art"``; the replacement is a
-    space rather than nothing so that adjacent words are never merged.
+    ``"doesn't"`` becomes ``"doesnt"`` so that negation cues survive
+    tokenization, while ``"state-of-the-art"`` becomes ``"state of the art"``:
+    a hyphen is replaced by a space rather than removed, so adjacent words are
+    never merged into a new token.
     """
-    return PUNCTUATION_PATTERN.sub(" ", text)
+    return PUNCTUATION_PATTERN.sub(" ", APOSTROPHE_PATTERN.sub("", text))
 
 
 def normalize(

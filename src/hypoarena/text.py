@@ -258,3 +258,24 @@ def extract_numbers(text: str) -> list[float]:
     letter). Grounding checks therefore compare magnitudes, not quantities.
     """
     return [float(match) for match in NUMBER_PATTERN.findall(text)]
+
+
+SENTENCE_BOUNDARY_PATTERN = re.compile(r"(?<=[.!?])\s+")
+
+
+def sentence_split(text: str) -> list[str]:
+    """Split ``text`` into whitespace-normalized sentences.
+
+    The heuristic is deliberately simple: a sentence ends at ``.``, ``!`` or
+    ``?`` followed by whitespace. Abbreviations (``"Fig. 2"``, ``"e.g."``) are
+    therefore over-split; callers that need exact sentence spans should use the
+    corpus span offsets instead of this helper.
+    """
+    collapsed = normalize_whitespace(text)
+    if not collapsed:
+        return []
+    return [
+        part.strip()
+        for part in SENTENCE_BOUNDARY_PATTERN.split(collapsed)
+        if part.strip()
+    ]

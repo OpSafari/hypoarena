@@ -242,3 +242,19 @@ def word_ngrams(tokens: Sequence[str], n: int) -> list[str]:
     if len(words) < n:
         return [" ".join(words)]
     return [" ".join(words[index : index + n]) for index in range(len(words) - n + 1)]
+
+
+NUMBER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![A-Za-z0-9_])"
+)
+
+
+def extract_numbers(text: str) -> list[float]:
+    """Return every standalone numeric literal in ``text``, in order.
+
+    Documented limitations: units and percent signs are ignored (``"12%"`` gives
+    ``12.0``), and dotted version strings are not treated as single values
+    (``"v1.2.3"`` gives ``[2.3]`` because the leading ``v1`` is glued to a
+    letter). Grounding checks therefore compare magnitudes, not quantities.
+    """
+    return [float(match) for match in NUMBER_PATTERN.findall(text)]

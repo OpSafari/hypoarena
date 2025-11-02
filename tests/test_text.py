@@ -9,6 +9,7 @@ from hypoarena.text import (
     STOPWORDS,
     char_ngrams,
     content_tokens,
+    extract_numbers,
     fold_accents,
     normalize,
     normalize_whitespace,
@@ -135,3 +136,27 @@ def test_ngram_builders_reject_non_positive_sizes(size: int) -> None:
         char_ngrams("abc", size)
     with pytest.raises(ValidationError):
         word_ngrams(["a", "b"], size)
+
+
+def test_extract_numbers_finds_integers_floats_and_signs() -> None:
+    assert extract_numbers("levels rose by 12 and fell to -3.5 (+0.25)") == [
+        12.0,
+        -3.5,
+        0.25,
+    ]
+
+
+def test_extract_numbers_handles_scientific_notation_and_percent() -> None:
+    assert extract_numbers("Kd = 1.5e-9 M, 42% of cells") == [1.5e-9, 42.0]
+
+
+def test_extract_numbers_ignores_numbers_glued_to_letters() -> None:
+    assert extract_numbers("p53 and IL6 are proteins") == []
+
+
+def test_extract_numbers_partially_reads_dotted_version_strings() -> None:
+    assert extract_numbers("v1.2.3") == [2.3]
+
+
+def test_extract_numbers_returns_empty_list_without_digits() -> None:
+    assert extract_numbers("no numeric content here") == []

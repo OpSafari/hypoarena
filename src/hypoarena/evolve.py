@@ -14,7 +14,7 @@ the engine re-validates the graph after inserting a child. The property tests in
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from random import Random
 
 from hypoarena.dedup import (
@@ -654,3 +654,59 @@ class EvolutionEngine:
         return tuple(
             self.step(graph, start + index + 1) for index in range(generations)
         )
+
+
+DEFAULT_NOVELTY_THRESHOLD = 0.9
+
+
+@dataclass(frozen=True)
+class EvolutionConfig:
+    """Which operators run, how often, and how strict the novelty gate is."""
+
+    seed: int = 0
+    operators: tuple[str, ...] = OPERATORS
+    per_operator: int = 1
+    generations: int = 1
+    novelty_threshold: float = DEFAULT_NOVELTY_THRESHOLD
+
+    def __post_init__(self) -> None:
+        for operator in self.operators:
+            check_operator(operator)
+        if not self.operators:
+            raise ValidationError("an evolution config needs at least one operator")
+        if self.per_operator < 1:
+            raise ValidationError(
+                "per_operator must be >= 1", per_operator=self.per_operator
+            )
+        if self.generations < 1:
+            raise ValidationError(
+                "generations must be >= 1", generations=self.generations
+            )
+        if not 0.0 < self.novelty_threshold <= 1.0:
+            raise ValidationError(
+                "novelty_threshold must lie within (0, 1]",
+                novelty_threshold=self.novelty_threshold,
+            )
+
+    def novelty_config(self) -> DedupConfig:
+        """Return the dedup configuration the novelty gate should use."""
+        return DedupConfig(
+            method="jaccard",
+            threshold=self.novelty_threshold,
+            ngram_size=1,
+            shingle_unit="word",
+            content_only=True,
+        )
+
+    def engine(self) -> EvolutionEngine:
+        """Build the engine this configuration describes."""
+        return EvolutionEngine(
+            seed=self.seed,
+            operators=self.operators,
+            per_operator=self.per_operator,
+            novelty_config=self.novelty_config(),
+        )
+
+    def fingerprint(self) -> str:
+        """Return a digest of the configuration for run metadata."""
+        return content_hash(asdict(self))

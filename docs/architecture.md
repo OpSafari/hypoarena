@@ -63,5 +63,6 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | `hypoarena.tournament` | rubric 打分、成对赛程、Elo 更新与排序统计 |
 | `hypoarena.dedup` | 精确/Jaccard/TF-IDF/MinHash+LSH 去重、聚类与新颖度守卫 |
 | `hypoarena.evolve` | 五种演化算子、新颖度闸门与按代演化的引擎 |
+| `hypoarena.belief` | odds 空间的贝叶斯累积、矛盾策略与先验敏感性 |
 
 模块表随实现推进补充；接口约定见 [api.md](api.md)。

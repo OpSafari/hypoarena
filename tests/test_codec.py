@@ -6,7 +6,11 @@ import pytest
 
 from hypoarena.codec import (
     check_schema_version,
+    present_value,
     reject_unknown_keys,
+    require_bool,
+    require_float,
+    require_int,
     require_keys,
     require_mapping,
     require_str,
@@ -73,3 +77,53 @@ def test_check_schema_version_accepts_and_rejects() -> None:
         check_schema_version(payload, field="claim", expected="2.0")
     with pytest.raises(SchemaError, match="missing"):
         check_schema_version({}, field="claim", expected="1.0")
+
+
+def test_require_int_accepts_in_range_values() -> None:
+    assert require_int({"start": 0}, "start", field="span") == 0
+    assert (
+        require_int({"start": 12}, "start", field="span", minimum=0, maximum=100) == 12
+    )
+
+
+def test_require_int_rejects_bools_floats_and_strings() -> None:
+    for value in (True, 1.5, "3", None):
+        with pytest.raises(SchemaError, match="must be an integer"):
+            require_int({"start": value}, "start", field="span")
+
+
+def test_require_int_reports_bound_violations() -> None:
+    with pytest.raises(SchemaError) as low:
+        require_int({"start": -1}, "start", field="span", minimum=0)
+    assert low.value.details["minimum"] == 0
+    with pytest.raises(SchemaError) as high:
+        require_int({"end": 101}, "end", field="span", minimum=0, maximum=100)
+    assert high.value.details["maximum"] == 100
+
+
+def test_require_float_coerces_integers_and_rejects_nan() -> None:
+    assert require_float({"strength": 1}, "strength", field="evidence") == 1.0
+    with pytest.raises(SchemaError, match="must be finite"):
+        require_float({"strength": float("nan")}, "strength", field="evidence")
+    with pytest.raises(SchemaError, match="must be a number"):
+        require_float({"strength": "0.5"}, "strength", field="evidence")
+
+
+def test_require_float_enforces_inclusive_bounds() -> None:
+    assert require_float({"s": 0.0}, "s", field="e", minimum=0.0, maximum=1.0) == 0.0
+    assert require_float({"s": 1.0}, "s", field="e", minimum=0.0, maximum=1.0) == 1.0
+    with pytest.raises(SchemaError):
+        require_float({"s": 1.01}, "s", field="e", minimum=0.0, maximum=1.0)
+
+
+def test_require_bool_rejects_truthy_substitutes() -> None:
+    assert require_bool({"flag": False}, "flag", field="cfg") is False
+    for value in (1, "true", None):
+        with pytest.raises(SchemaError, match="must be a boolean"):
+            require_bool({"flag": value}, "flag", field="cfg")
+
+
+def test_present_value_names_the_missing_key() -> None:
+    with pytest.raises(SchemaError) as info:
+        present_value({}, "strength", field="evidence")
+    assert info.value.details["key"] == "strength"

@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 import pytest
 
 from hypoarena.codec import (
     check_schema_version,
+    optional_str,
     present_value,
     reject_unknown_keys,
     require_bool,
+    require_enum,
     require_float,
     require_int,
     require_keys,
     require_mapping,
     require_str,
+    require_str_tuple,
 )
 from hypoarena.errors import SchemaError
 
@@ -127,3 +132,51 @@ def test_present_value_names_the_missing_key() -> None:
     with pytest.raises(SchemaError) as info:
         present_value({}, "strength", field="evidence")
     assert info.value.details["key"] == "strength"
+
+
+class Colour(StrEnum):
+    RED = "red"
+    BLUE = "blue"
+
+
+def test_require_enum_accepts_values_and_members() -> None:
+    assert require_enum({"c": "red"}, "c", Colour, field="cell") is Colour.RED
+    assert require_enum({"c": Colour.BLUE}, "c", Colour, field="cell") is Colour.BLUE
+
+
+def test_require_enum_rejects_unknown_values_and_lists_allowed() -> None:
+    with pytest.raises(SchemaError) as info:
+        require_enum({"c": "green"}, "c", Colour, field="cell")
+    assert info.value.details["allowed"] == ["red", "blue"]
+
+
+def test_require_enum_rejects_non_strings() -> None:
+    with pytest.raises(SchemaError, match="must be a string"):
+        require_enum({"c": 1}, "c", Colour, field="cell")
+
+
+def test_require_str_tuple_returns_a_tuple_of_strings() -> None:
+    assert require_str_tuple({"v": ["a", "b"]}, "v", field="claim") == ("a", "b")
+    assert require_str_tuple({"v": []}, "v", field="claim") == ()
+
+
+def test_require_str_tuple_rejects_scalars_and_blank_items() -> None:
+    with pytest.raises(SchemaError, match="must be a list"):
+        require_str_tuple({"v": "ab"}, "v", field="claim")
+    with pytest.raises(SchemaError, match="blank"):
+        require_str_tuple({"v": ["a", "  "]}, "v", field="claim")
+
+
+def test_require_str_tuple_enforces_item_bounds() -> None:
+    with pytest.raises(SchemaError, match="at least 1"):
+        require_str_tuple({"v": []}, "v", field="claim", minimum_items=1)
+    with pytest.raises(SchemaError, match="at most 2"):
+        require_str_tuple({"v": ["a", "b", "c"]}, "v", field="claim", maximum_items=2)
+
+
+def test_optional_str_treats_absent_and_null_as_none() -> None:
+    assert optional_str({}, "note", field="claim") is None
+    assert optional_str({"note": None}, "note", field="claim") is None
+    assert optional_str({"note": "x"}, "note", field="claim") == "x"
+    with pytest.raises(SchemaError, match="blank"):
+        optional_str({"note": " "}, "note", field="claim")

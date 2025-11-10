@@ -8,7 +8,7 @@ constructor. Coercion is deliberately narrow: types are checked, not guessed.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from hypoarena.errors import SchemaError
@@ -44,3 +44,52 @@ def require_str(
     if not allow_empty and not value.strip():
         raise SchemaError(f"{field}.{key} must not be blank", field=field, key=key)
     return value
+
+
+def require_keys(
+    mapping: Mapping[str, Any], required: Sequence[str], *, field: str
+) -> None:
+    """Raise when any of the ``required`` keys is absent from ``mapping``."""
+    missing = [key for key in required if key not in mapping]
+    if missing:
+        raise SchemaError(
+            f"{field} is missing required keys", field=field, missing=missing
+        )
+
+
+def reject_unknown_keys(
+    mapping: Mapping[str, Any], allowed: Sequence[str], *, field: str
+) -> None:
+    """Raise when ``mapping`` carries keys outside the ``allowed`` set.
+
+    Rejecting unknown keys keeps old artifacts from being silently reinterpreted
+    after a schema change: a new field must be introduced deliberately.
+    """
+    known = set(allowed)
+    unknown = sorted(str(key) for key in mapping if key not in known)
+    if unknown:
+        raise SchemaError(
+            f"{field} has unknown keys",
+            field=field,
+            unknown=unknown,
+            allowed=sorted(known),
+        )
+
+
+def check_schema_version(
+    mapping: Mapping[str, Any],
+    *,
+    field: str,
+    expected: str,
+    key: str = "schema_version",
+) -> str:
+    """Verify the payload's ``schema_version`` equals ``expected``."""
+    found = require_str(mapping, key, field=field)
+    if found != expected:
+        raise SchemaError(
+            f"{field} uses an unsupported schema version",
+            field=field,
+            found=found,
+            expected=expected,
+        )
+    return found

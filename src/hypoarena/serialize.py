@@ -47,17 +47,19 @@ from hypoarena.codec import (
     require_str,
     require_str_tuple,
 )
+from hypoarena.config import RunConfig
 from hypoarena.corpus import Corpus, Document
-from hypoarena.debate import Critique, DebateResult, DebateTurn
+from hypoarena.debate import Critique, DebateConfig, DebateResult, DebateTurn
 from hypoarena.dedup import DedupConfig, DedupReport, DuplicateCluster
 from hypoarena.errors import ArtifactError, SchemaError
-from hypoarena.evolve import EvolutionRecord, EvolutionStep, Rejection
+from hypoarena.evolve import EvolutionConfig, EvolutionRecord, EvolutionStep, Rejection
 from hypoarena.graph import ClaimEdge, GraphStats, HypothesisGraph
 from hypoarena.grounding import (
     CitationCheck,
     GroundingFlag,
     GroundingIssue,
     GroundingReport,
+    VerifierConfig,
     summarize_reports,
 )
 from hypoarena.http_agent import HttpConfig
@@ -78,6 +80,7 @@ from hypoarena.synthetic import (
     PlantedCluster,
     PlantedLink,
     PlantedTruth,
+    SyntheticConfig,
 )
 from hypoarena.tournament import (
     EloModel,
@@ -1920,6 +1923,17 @@ def tournament_from_lines(
     return result
 
 
+SYNTHETIC_CONFIG_KEYS = (
+    "seed",
+    "chains",
+    "chain_length",
+    "paraphrases_per_link",
+    "competitors_per_chain",
+    "contradictions_per_chain",
+    "distractor_documents",
+    "filler_sentences",
+    "source_tag",
+)
 DEDUP_CONFIG_KEYS = (
     "method",
     "threshold",
@@ -2477,3 +2491,231 @@ def belief_from_lines(
             count_keys=BELIEF_COUNT_KEYS,
         )
     return tuple(states), settings
+
+
+RUN_CONFIG_KEYS = (
+    "seed",
+    "stages",
+    "run_id",
+    "corpus",
+    "grounding",
+    "dedup",
+    "debate",
+    "tournament",
+    "belief",
+    "evolution",
+)
+GROUNDING_CONFIG_KEYS = (
+    "min_entity_overlap",
+    "min_quote_length",
+    "numeric_tolerance",
+    "polarity_checks",
+    "numeric_checks",
+)
+TOURNAMENT_CONFIG_KEYS = ("seed", "repeats", "model", "weights")
+DEBATE_CONFIG_KEYS = (
+    "rounds",
+    "critics",
+    "stop_on_unchanged",
+    "proposal_prompt",
+    "critique_prompt",
+)
+EVOLUTION_CONFIG_KEYS = (
+    "seed",
+    "operators",
+    "per_operator",
+    "generations",
+    "novelty_threshold",
+)
+
+
+def verifier_config_to_dict(config: VerifierConfig) -> dict[str, Any]:
+    """Encode grounding verifier thresholds."""
+    return asdict(config)
+
+
+def verifier_config_from_dict(
+    payload: object, *, field: str = "grounding"
+) -> VerifierConfig:
+    """Decode grounding verifier thresholds."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, GROUNDING_CONFIG_KEYS, field=field)
+    return VerifierConfig(
+        min_entity_overlap=require_float(
+            mapping, "min_entity_overlap", field=field, minimum=0.0, maximum=1.0
+        ),
+        min_quote_length=require_int(
+            mapping, "min_quote_length", field=field, minimum=1
+        ),
+        numeric_tolerance=require_float(
+            mapping, "numeric_tolerance", field=field, minimum=0.0
+        ),
+        polarity_checks=require_bool(mapping, "polarity_checks", field=field),
+        numeric_checks=require_bool(mapping, "numeric_checks", field=field),
+    )
+
+
+def debate_config_to_dict(config: DebateConfig) -> dict[str, Any]:
+    """Encode debate loop settings."""
+    return asdict(config)
+
+
+def debate_config_from_dict(payload: object, *, field: str = "debate") -> DebateConfig:
+    """Decode debate loop settings."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, DEBATE_CONFIG_KEYS, field=field)
+    return DebateConfig(
+        rounds=require_int(mapping, "rounds", field=field, minimum=1),
+        critics=require_int(mapping, "critics", field=field, minimum=1),
+        stop_on_unchanged=require_bool(mapping, "stop_on_unchanged", field=field),
+        proposal_prompt=require_str(mapping, "proposal_prompt", field=field),
+        critique_prompt=require_str(mapping, "critique_prompt", field=field),
+    )
+
+
+def tournament_config_to_dict(config: TournamentConfig) -> dict[str, Any]:
+    """Encode tournament settings."""
+    return {
+        "seed": config.seed,
+        "repeats": config.repeats,
+        "model": elo_model_to_dict(config.model),
+        "weights": config.weights.as_dict(),
+    }
+
+
+def tournament_config_from_dict(
+    payload: object, *, field: str = "tournament"
+) -> TournamentConfig:
+    """Decode tournament settings."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, TOURNAMENT_CONFIG_KEYS, field=field)
+    weights_payload = require_mapping(
+        present_value(mapping, "weights", field=field), field=f"{field}.weights"
+    )
+    reject_unknown_keys(weights_payload, RUBRIC_KEYS, field=f"{field}.weights")
+    return TournamentConfig(
+        seed=require_int(mapping, "seed", field=field),
+        repeats=require_int(mapping, "repeats", field=field, minimum=1),
+        model=elo_model_from_dict(
+            present_value(mapping, "model", field=field), field=f"{field}.model"
+        ),
+        weights=RubricWeights(
+            **{
+                name: require_float(
+                    weights_payload, name, field=f"{field}.weights", minimum=0.0
+                )
+                for name in RUBRIC_KEYS
+            }
+        ),
+    )
+
+
+def evolution_config_to_dict(config: EvolutionConfig) -> dict[str, Any]:
+    """Encode evolution settings."""
+    return asdict(config)
+
+
+def evolution_config_from_dict(
+    payload: object, *, field: str = "evolution"
+) -> EvolutionConfig:
+    """Decode evolution settings."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, EVOLUTION_CONFIG_KEYS, field=field)
+    return EvolutionConfig(
+        seed=require_int(mapping, "seed", field=field),
+        operators=require_str_tuple(mapping, "operators", field=field, minimum_items=1),
+        per_operator=require_int(mapping, "per_operator", field=field, minimum=1),
+        generations=require_int(mapping, "generations", field=field, minimum=1),
+        novelty_threshold=require_float(
+            mapping, "novelty_threshold", field=field, minimum=0.0, maximum=1.0
+        ),
+    )
+
+
+def run_config_to_dict(config: RunConfig) -> dict[str, Any]:
+    """Encode a whole run configuration."""
+    return {
+        "seed": config.seed,
+        "stages": list(config.stages),
+        "run_id": config.run_id,
+        "corpus": asdict(config.corpus),
+        "grounding": verifier_config_to_dict(config.grounding),
+        "dedup": dedup_config_to_dict(config.dedup),
+        "debate": debate_config_to_dict(config.debate),
+        "tournament": tournament_config_to_dict(config.tournament),
+        "belief": belief_config_to_dict(config.belief),
+        "evolution": evolution_config_to_dict(config.evolution),
+    }
+
+
+def run_config_from_dict(payload: object, *, field: str = "config") -> RunConfig:
+    """Decode a whole run configuration."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, RUN_CONFIG_KEYS, field=field)
+    corpus_payload = require_mapping(
+        present_value(mapping, "corpus", field=field), field=f"{field}.corpus"
+    )
+    reject_unknown_keys(corpus_payload, SYNTHETIC_CONFIG_KEYS, field=f"{field}.corpus")
+    return RunConfig(
+        seed=require_int(mapping, "seed", field=field),
+        stages=require_str_tuple(mapping, "stages", field=field, minimum_items=1),
+        run_id=require_str(mapping, "run_id", field=field),
+        corpus=SyntheticConfig(
+            seed=require_int(corpus_payload, "seed", field=f"{field}.corpus"),
+            chains=require_int(
+                corpus_payload, "chains", field=f"{field}.corpus", minimum=1
+            ),
+            chain_length=require_int(
+                corpus_payload, "chain_length", field=f"{field}.corpus", minimum=2
+            ),
+            paraphrases_per_link=require_int(
+                corpus_payload,
+                "paraphrases_per_link",
+                field=f"{field}.corpus",
+                minimum=1,
+            ),
+            competitors_per_chain=require_int(
+                corpus_payload,
+                "competitors_per_chain",
+                field=f"{field}.corpus",
+                minimum=0,
+            ),
+            contradictions_per_chain=require_int(
+                corpus_payload,
+                "contradictions_per_chain",
+                field=f"{field}.corpus",
+                minimum=0,
+            ),
+            distractor_documents=require_int(
+                corpus_payload,
+                "distractor_documents",
+                field=f"{field}.corpus",
+                minimum=0,
+            ),
+            filler_sentences=require_int(
+                corpus_payload, "filler_sentences", field=f"{field}.corpus", minimum=0
+            ),
+            source_tag=require_str(
+                corpus_payload, "source_tag", field=f"{field}.corpus"
+            ),
+        ),
+        grounding=verifier_config_from_dict(
+            present_value(mapping, "grounding", field=field), field=f"{field}.grounding"
+        ),
+        dedup=dedup_config_from_dict(
+            present_value(mapping, "dedup", field=field), field=f"{field}.dedup"
+        ),
+        debate=debate_config_from_dict(
+            present_value(mapping, "debate", field=field), field=f"{field}.debate"
+        ),
+        tournament=tournament_config_from_dict(
+            present_value(mapping, "tournament", field=field),
+            field=f"{field}.tournament",
+        ),
+        belief=belief_config_from_dict(
+            present_value(mapping, "belief", field=field), field=f"{field}.belief"
+        ),
+        evolution=evolution_config_from_dict(
+            present_value(mapping, "evolution", field=field), field=f"{field}.evolution"
+        ),
+    )

@@ -16,15 +16,21 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hypoarena._version import __version__
 from hypoarena.config import (
     STAGES,
+    RunConfig,
 )
 from hypoarena.errors import (
     ArtifactError,
     ValidationError,
+)
+from hypoarena.schema import (
+    SCHEMA_VERSION,
 )
 from hypoarena.serialize import (
     dumps_line,
@@ -34,6 +40,16 @@ from hypoarena.serialize import (
 )
 
 ARTIFACT_PATTERN = re.compile(r"[A-Za-z0-9_.-]+\.(?:jsonl|json)")
+METADATA_ARTIFACT = "run.json"
+METADATA_KEYS = (
+    "run_id",
+    "package_version",
+    "schema_version",
+    "config_fingerprint",
+    "seed",
+    "stages",
+    "created_at",
+)
 CHECKPOINT_SUFFIX = ".done"
 
 
@@ -111,6 +127,14 @@ class ArtifactStore:
             )
         return loads_line(lines[0], field=name)
 
+    def write_metadata(self, metadata: RunMetadata) -> Path:
+        """Write the run metadata document."""
+        return self.write_json(METADATA_ARTIFACT, metadata.as_dict())
+
+    def read_metadata(self) -> RunMetadata:
+        """Read the run metadata document."""
+        return RunMetadata.from_dict(self.read_json(METADATA_ARTIFACT))
+
     def listing(self) -> tuple[str, ...]:
         """Return the artifact names present in this run, sorted."""
         if not self.root.is_dir():
@@ -148,3 +172,69 @@ class ArtifactStore:
     def clear_checkpoints(self) -> int:
         """Remove every marker; return how many were deleted."""
         return sum(1 for stage in STAGES if self.clear_stage(stage))
+
+
+@dataclass(frozen=True)
+class RunMetadata:
+    """What has to be recorded to interpret a run's artifacts later.
+
+    ``created_at`` is *never* read from the clock: a caller that wants a
+    timestamp supplies one. Leaving it out is what makes two runs of the same
+    configuration produce byte-identical artifacts, which the resume tests rely
+    on.
+    """
+
+    run_id: str
+    package_version: str
+    schema_version: str
+    config_fingerprint: str
+    seed: int
+    stages: tuple[str, ...]
+    created_at: str | None = None
+
+    @classmethod
+    def from_config(
+        cls, config: RunConfig, *, created_at: str | None = None
+    ) -> RunMetadata:
+        """Build metadata for a configuration."""
+        return cls(
+            run_id=config.run_id,
+            package_version=__version__,
+            schema_version=SCHEMA_VERSION,
+            config_fingerprint=config.fingerprint(),
+            seed=config.seed,
+            stages=config.stages,
+            created_at=created_at,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a JSON-ready view."""
+        return {
+            "run_id": self.run_id,
+            "package_version": self.package_version,
+            "schema_version": self.schema_version,
+            "config_fingerprint": self.config_fingerprint,
+            "seed": self.seed,
+            "stages": list(self.stages),
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> RunMetadata:
+        """Rebuild metadata from its JSON view, rejecting unknown keys."""
+        unknown = sorted(set(payload) - set(METADATA_KEYS))
+        if unknown:
+            raise ValidationError("unknown run metadata keys", unknown=unknown)
+        return cls(
+            run_id=str(payload["run_id"]),
+            package_version=str(payload["package_version"]),
+            schema_version=str(payload["schema_version"]),
+            config_fingerprint=str(payload["config_fingerprint"]),
+            seed=int(payload["seed"]),
+            stages=tuple(str(stage) for stage in payload["stages"]),
+            created_at=(
+                None
+                if payload.get("created_at") is None
+                else str(payload["created_at"])
+            ),
+        )

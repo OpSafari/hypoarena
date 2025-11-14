@@ -10,30 +10,79 @@ produces byte-identical artifacts.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from hypoarena.agents import (
     ScriptedAgent,
+    Usage,
 )
 from hypoarena.artifacts import (
     ArtifactStore,
     RunMetadata,
 )
+from hypoarena.belief import (
+    BeliefState,
+)
 from hypoarena.config import (
     RunConfig,
 )
+from hypoarena.corpus import (
+    Corpus,
+)
 from hypoarena.cost import (
     CostLedger,
+)
+from hypoarena.debate import (
+    DebateResult,
+    corpus_context,
+)
+from hypoarena.dedup import (
+    DedupReport,
 )
 from hypoarena.errors import (
     ConfigError,
     ValidationError,
 )
+from hypoarena.evolve import (
+    EvolutionStep,
+)
 from hypoarena.graph import (
     HypothesisGraph,
 )
+from hypoarena.grounding import (
+    GroundingReport,
+)
 from hypoarena.ids import (
     content_hash,
+    make_id,
+)
+from hypoarena.schema import (
+    Claim,
+    PredictedRelation,
+    Provenance,
+    Scope,
+)
+from hypoarena.serialize import (
+    claim_from_line,
+    claim_to_line,
+    corpus_from_text,
+    corpus_to_lines,
+    graph_from_lines,
+    graph_to_lines,
+    truth_from_lines,
+    truth_to_lines,
+)
+from hypoarena.synthetic import (
+    PlantedTruth,
+    SyntheticBundle,
+    build_bundle,
+)
+from hypoarena.text import (
+    content_tokens,
+    normalize,
+)
+from hypoarena.tournament import (
+    TournamentResult,
 )
 
 DEFAULT_AGENT_QUALITIES: tuple[float, ...] = (0.9, 0.5, 0.2)
@@ -118,15 +167,16 @@ class RunState:
 
     corpus_hash: str = ""
     graph: HypothesisGraph = field(default_factory=HypothesisGraph)
-    candidates: tuple[object, ...] = ()
-    reports: tuple[object, ...] = ()
-    dedup: object | None = None
-    debates: tuple[object, ...] = ()
-    tournament: object | None = None
-    evolution: tuple[object, ...] = ()
-    beliefs: tuple[object, ...] = ()
-    truth: object | None = None
-    corpus: object | None = None
+    corpus: Corpus | None = None
+    truth: PlantedTruth | None = None
+    bundle: SyntheticBundle | None = None
+    candidates: tuple[Claim, ...] = ()
+    reports: tuple[GroundingReport, ...] = ()
+    dedup: DedupReport | None = None
+    debates: tuple[DebateResult, ...] = ()
+    tournament: TournamentResult | None = None
+    evolution: tuple[EvolutionStep, ...] = ()
+    beliefs: tuple[BeliefState, ...] = ()
 
 
 class Pipeline:
@@ -153,12 +203,107 @@ class Pipeline:
             tuple(agents) if agents is not None else default_agents(config.seed)
         )
         self.state = RunState()
+        self.usage_snapshot: dict[str, Usage] = {}
         if not self.agents:
             raise ConfigError("a pipeline needs at least one agent")
 
     def handlers(self) -> dict[str, Callable[[], StageResult]]:
         """Return the stage implementations this pipeline knows."""
-        return {}
+        return {
+            "corpus": self.stage_corpus,
+            "generate": self.stage_generate,
+        }
+
+    def record_usage(self, stage: str) -> None:
+        """Record each agent's usage *delta* for one stage.
+
+        Agents are reused across stages, so recording their cumulative counters
+        would double count. The pipeline keeps a snapshot per agent and books only
+        what changed since the previous stage.
+        """
+        for agent in self.agents:
+            previous = self.usage_snapshot.get(agent.name, Usage())
+            calls = agent.usage.calls - previous.calls
+            if calls <= 0:
+                self.usage_snapshot[agent.name] = Usage(
+                    agent.usage.calls,
+                    agent.usage.prompt_tokens,
+                    agent.usage.completion_tokens,
+                    dict(agent.usage.by_task),
+                )
+                continue
+            delta = Usage(
+                calls=calls,
+                prompt_tokens=agent.usage.prompt_tokens - previous.prompt_tokens,
+                completion_tokens=(
+                    agent.usage.completion_tokens - previous.completion_tokens
+                ),
+                by_task={
+                    task: count - previous.by_task.get(task, 0)
+                    for task, count in agent.usage.by_task.items()
+                    if count - previous.by_task.get(task, 0) > 0
+                },
+            )
+            self.usage_snapshot[agent.name] = Usage(
+                agent.usage.calls,
+                agent.usage.prompt_tokens,
+                agent.usage.completion_tokens,
+                dict(agent.usage.by_task),
+            )
+            self.ledger.record(stage, agent.name, delta)
+
+    def stage_corpus(self) -> StageResult:
+        """Generate the synthetic corpus and the graph derived from it."""
+        bundle = build_bundle(replace(self.config.corpus, seed=self.config.seed))
+        self.state.bundle = bundle
+        self.state.corpus = bundle.corpus
+        self.state.truth = bundle.truth
+        self.state.graph = bundle.graph()
+        self.state.corpus_hash = bundle.corpus_hash
+        self.store.write_lines("corpus.jsonl", corpus_to_lines(bundle.corpus))
+        self.store.write_lines("truth.jsonl", truth_to_lines(bundle.truth))
+        self.store.write_lines("graph.jsonl", graph_to_lines(self.state.graph))
+        return StageResult("corpus", len(bundle.corpus), CORPUS_ARTIFACTS)
+
+    def stage_generate(self) -> StageResult:
+        """Collect one proposal per agent and add the usable ones to the graph."""
+        if self.state.corpus is None:
+            raise ConfigError("generate needs the corpus stage to have run")
+        context = corpus_context(self.state.corpus, limit=GENERATE_CONTEXT_LINES)
+        candidates: list[Claim] = []
+        for agent in self.agents:
+            response = agent.propose(self.config.debate.proposal_prompt, context)
+            claim = claim_from_proposal(
+                response.text, agent=agent.name, seed=self.config.seed
+            )
+            if claim is None or self.state.graph.has_claim(claim.claim_id):
+                continue
+            candidates.append(claim)
+            self.state.graph.add_claim(claim)
+        self.record_usage("generate")
+        self.state.candidates = tuple(candidates)
+        self.store.write_lines(
+            CANDIDATE_ARTIFACT, [claim_to_line(claim) for claim in candidates]
+        )
+        self.store.write_lines("graph.jsonl", graph_to_lines(self.state.graph))
+        return StageResult(
+            "generate", len(candidates), (CANDIDATE_ARTIFACT, "graph.jsonl")
+        )
+
+    def restore_corpus(self) -> None:
+        """Reload corpus, truth and graph artifacts after a resume."""
+        corpus = corpus_from_text("".join(self.store.read_lines("corpus.jsonl")))
+        self.state.corpus = corpus
+        self.state.truth = truth_from_lines(self.store.read_lines("truth.jsonl"))
+        self.state.graph = graph_from_lines(self.store.read_lines("graph.jsonl"))
+        self.state.corpus_hash = corpus.signature()
+
+    def restore_generate(self) -> None:
+        """Reload the candidate claims and the graph they were added to."""
+        self.state.candidates = tuple(
+            claim_from_line(line) for line in self.store.read_lines(CANDIDATE_ARTIFACT)
+        )
+        self.state.graph = graph_from_lines(self.store.read_lines("graph.jsonl"))
 
     def run(self, *, resume: bool = False) -> RunSummary:
         """Execute the configured stages and write the run summary."""
@@ -185,4 +330,76 @@ class Pipeline:
 
     def restore(self, stage: str) -> None:
         """Reload the state a completed stage produced (used when resuming)."""
-        raise NotImplementedError(f"{type(self).__name__} must implement restore()")
+        loaders: dict[str, Callable[[], None]] = {
+            "corpus": self.restore_corpus,
+            "generate": self.restore_generate,
+        }
+        loader = loaders.get(stage)
+        if loader is None:
+            raise ConfigError("stage has no restore implementation", stage=stage)
+        loader()
+
+
+CORPUS_ARTIFACTS = ("corpus.jsonl", "truth.jsonl", "graph.jsonl")
+CANDIDATE_ARTIFACT = "candidates.jsonl"
+PROPOSAL_SCOPE = "synthetic corpus"
+RELATION_KEYWORDS: tuple[tuple[str, PredictedRelation], ...] = (
+    ("increases", PredictedRelation.INCREASES),
+    ("upregulates", PredictedRelation.INCREASES),
+    ("elevates", PredictedRelation.INCREASES),
+    ("decreases", PredictedRelation.DECREASES),
+    ("reduces", PredictedRelation.DECREASES),
+    ("enables", PredictedRelation.ENABLES),
+    ("is required for", PredictedRelation.ENABLES),
+    ("inhibits", PredictedRelation.INHIBITS),
+    ("blocks", PredictedRelation.INHIBITS),
+    ("causes", PredictedRelation.CAUSES),
+    ("triggers", PredictedRelation.CAUSES),
+)
+
+
+def relation_from_statement(statement: str) -> PredictedRelation:
+    """Map a statement's wording onto a predicted relation.
+
+    This is a documented keyword heuristic, not a parser: the first matching
+    keyword wins, and wording that matches nothing stays ``associates`` rather
+    than guessing a direction.
+    """
+    lowered = normalize(statement)
+    for keyword, relation in RELATION_KEYWORDS:
+        if keyword in lowered:
+            return relation
+    return PredictedRelation.ASSOCIATES
+
+
+def claim_from_proposal(statement: str, *, agent: str, seed: int) -> Claim | None:
+    """Turn one agent proposal into a claim, or ``None`` when it is unusable.
+
+    The variables are the first and last distinct content tokens of the
+    proposal — a deliberate, inspectable choice. Proposals carry no citations, so
+    they enter the graph ungrounded and the verify stage is what grades them.
+    """
+    tokens = list(dict.fromkeys(content_tokens(statement)))
+    if len(tokens) < 2:
+        return None
+    subject, target = tokens[0], tokens[-1]
+    if subject == target:
+        return None
+    return Claim(
+        claim_id=make_id("clm", "proposed", seed, agent, statement),
+        statement=" ".join(statement.split()),
+        subject=subject,
+        object=target,
+        relation=relation_from_statement(statement),
+        scope=Scope(population=PROPOSAL_SCOPE),
+        citations=(),
+        provenance=Provenance(
+            origin="agent",
+            agent_id=make_id("agt", agent),
+            seed=seed,
+            notes="proposed",
+        ),
+    )
+
+
+GENERATE_CONTEXT_LINES = 6

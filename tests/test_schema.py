@@ -8,6 +8,7 @@ from hypoarena.errors import ValidationError
 from hypoarena.schema import (
     RELATION_OPPOSITES,
     SCHEMA_VERSION,
+    Citation,
     ClaimRelation,
     EvidencePolarity,
     PredictedRelation,
@@ -139,3 +140,53 @@ def test_scope_signature_ignores_condition_order() -> None:
     second = Scope("hek293 cells", ("serum starved", "hypoxia"))
     assert first.signature() == second.signature()
     assert first.signature() != Scope("other cells").signature()
+
+
+def make_citation(**overrides: object) -> Citation:
+    payload: dict[str, object] = {
+        "document_id": "doc_0123456789ab",
+        "start": 10,
+        "end": 25,
+        "quote": "kinase binds",
+    }
+    payload.update(overrides)
+    return Citation(**payload)  # type: ignore[arg-type]
+
+
+def test_citation_accepts_a_well_formed_span() -> None:
+    citation = make_citation()
+    assert citation.length == 15
+    assert citation.key() == ("doc_0123456789ab", 10, 25)
+
+
+def test_citation_rejects_malformed_document_ids() -> None:
+    with pytest.raises(ValidationError, match="malformed"):
+        make_citation(document_id="paper_1")
+    with pytest.raises(ValidationError, match="malformed"):
+        make_citation(document_id="clm_0123456789ab")
+
+
+def test_citation_rejects_bad_offsets() -> None:
+    with pytest.raises(ValidationError, match=">= 0"):
+        make_citation(start=-1, end=5)
+    with pytest.raises(ValidationError, match="non-empty"):
+        make_citation(start=10, end=10)
+    with pytest.raises(ValidationError, match="non-empty"):
+        make_citation(start=10, end=4)
+
+
+def test_citation_rejects_blank_or_overlong_quotes() -> None:
+    with pytest.raises(ValidationError, match="blank"):
+        make_citation(quote="   ")
+    with pytest.raises(ValidationError, match="longer than its span"):
+        make_citation(start=10, end=12, quote="way too long for the span")
+
+
+def test_citation_overlap_is_symmetric_and_document_scoped() -> None:
+    first = make_citation(start=10, end=25)
+    second = make_citation(start=20, end=35)
+    third = make_citation(start=25, end=40)
+    other_doc = make_citation(document_id="doc_ffffffffffff", start=20, end=35)
+    assert first.overlaps(second) and second.overlaps(first)
+    assert not first.overlaps(third)
+    assert not first.overlaps(other_doc)

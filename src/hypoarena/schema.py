@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum, unique
 
 from hypoarena.errors import ValidationError
-from hypoarena.ids import canonical_json
+from hypoarena.ids import canonical_json, is_valid_id
 from hypoarena.text import normalize
 
 SCHEMA_VERSION = "1.0"
@@ -139,4 +139,65 @@ class Scope:
                     normalize(condition) for condition in self.conditions
                 ),
             }
+        )
+
+
+DOCUMENT_ID_PREFIX = "doc"
+
+
+@dataclass(frozen=True)
+class Citation:
+    """A half-open character span in a corpus document plus the quoted text.
+
+    ``start``/``end`` are offsets into the document text and ``quote`` is what
+    the claim asserts the document says. The schema enforces the cheap structural
+    rules (ordered offsets, non-blank quote, quote no longer than the span);
+    whether the quote really occurs at those offsets is the grounding verifier's
+    job, because that needs the corpus.
+    """
+
+    document_id: str
+    start: int
+    end: int
+    quote: str
+
+    def __post_init__(self) -> None:
+        if not is_valid_id(self.document_id) or not self.document_id.startswith(
+            f"{DOCUMENT_ID_PREFIX}_"
+        ):
+            raise ValidationError(
+                "citation document id is malformed",
+                document_id=self.document_id,
+                expected_prefix=f"{DOCUMENT_ID_PREFIX}_",
+            )
+        if self.start < 0:
+            raise ValidationError("citation start must be >= 0", start=self.start)
+        if self.end <= self.start:
+            raise ValidationError(
+                "citation span must be non-empty", start=self.start, end=self.end
+            )
+        if not self.quote.strip():
+            raise ValidationError("citation quote must not be blank")
+        if len(self.quote) > self.end - self.start:
+            raise ValidationError(
+                "citation quote is longer than its span",
+                quote_length=len(self.quote),
+                span_length=self.end - self.start,
+            )
+
+    @property
+    def length(self) -> int:
+        """Number of characters covered by the span."""
+        return self.end - self.start
+
+    def key(self) -> tuple[str, int, int]:
+        """Return the identity used to deduplicate citations."""
+        return (self.document_id, self.start, self.end)
+
+    def overlaps(self, other: Citation) -> bool:
+        """True when both citations touch the same document and character range."""
+        return (
+            self.document_id == other.document_id
+            and self.start < other.end
+            and other.start < self.end
         )

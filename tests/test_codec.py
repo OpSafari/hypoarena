@@ -8,6 +8,8 @@ import pytest
 
 from hypoarena.codec import (
     check_schema_version,
+    dumps_line,
+    loads_line,
     optional_str,
     present_value,
     reject_unknown_keys,
@@ -180,3 +182,31 @@ def test_optional_str_treats_absent_and_null_as_none() -> None:
     assert optional_str({"note": "x"}, "note", field="claim") == "x"
     with pytest.raises(SchemaError, match="blank"):
         optional_str({"note": " "}, "note", field="claim")
+
+
+def test_dumps_line_is_canonical_and_newline_terminated() -> None:
+    assert dumps_line({"b": 1, "a": 2}) == '{"a":2,"b":1}\n'
+
+
+def test_dumps_line_is_stable_across_key_insertion_order() -> None:
+    assert dumps_line({"a": 1, "b": 2}) == dumps_line({"b": 2, "a": 1})
+
+
+def test_dumps_line_rejects_non_serializable_values() -> None:
+    with pytest.raises(SchemaError):
+        dumps_line({"fn": lambda: None})
+
+
+def test_loads_line_roundtrips_a_dumped_payload() -> None:
+    payload = {"claim_id": "clm_0123456789ab", "strength": 0.5}
+    assert loads_line(dumps_line(payload), field="claim") == payload
+
+
+def test_loads_line_reports_line_numbers_and_reasons() -> None:
+    with pytest.raises(SchemaError) as blank:
+        loads_line("   \n", field="evidence", line_number=4)
+    assert blank.value.details["line_number"] == 4
+    with pytest.raises(SchemaError, match="not valid JSON"):
+        loads_line("{oops", field="evidence", line_number=7)
+    with pytest.raises(SchemaError, match="must be a JSON object"):
+        loads_line("[1, 2]", field="evidence")

@@ -6,12 +6,14 @@ import pytest
 
 from hypoarena.errors import ValidationError
 from hypoarena.schema import (
+    PROVENANCE_ORIGINS,
     RELATION_OPPOSITES,
     SCHEMA_VERSION,
     Citation,
     ClaimRelation,
     EvidencePolarity,
     PredictedRelation,
+    Provenance,
     Scope,
     is_directional,
     opposite_relation,
@@ -190,3 +192,51 @@ def test_citation_overlap_is_symmetric_and_document_scoped() -> None:
     assert first.overlaps(second) and second.overlaps(first)
     assert not first.overlaps(third)
     assert not first.overlaps(other_doc)
+
+
+def test_provenance_accepts_known_origins() -> None:
+    for origin in sorted(PROVENANCE_ORIGINS):
+        record = Provenance(
+            origin=origin,
+            agent_id="agt_01" if origin == "agent" else None,
+            parents=("clm_0123456789ab",) if origin == "evolved" else (),
+        )
+        assert record.origin == origin
+
+
+def test_provenance_rejects_unknown_origins() -> None:
+    with pytest.raises(ValidationError, match="unknown provenance origin"):
+        Provenance(origin="oracle")
+
+
+def test_agent_provenance_requires_an_agent_id() -> None:
+    with pytest.raises(ValidationError, match="agent_id"):
+        Provenance(origin="agent")
+    assert Provenance(origin="agent", agent_id="agt_01").agent_id == "agt_01"
+
+
+def test_evolved_provenance_requires_parents_and_valid_ids() -> None:
+    with pytest.raises(ValidationError, match="parent"):
+        Provenance(origin="evolved")
+    with pytest.raises(ValidationError, match="malformed"):
+        Provenance(origin="evolved", parents=("not-an-id",))
+
+
+def test_provenance_rejects_negative_generations_and_bad_hashes() -> None:
+    with pytest.raises(ValidationError, match="generation"):
+        Provenance(origin="user", generation=-1)
+    with pytest.raises(ValidationError, match="hex"):
+        Provenance(origin="user", corpus_hash="xyz")
+    with pytest.raises(ValidationError, match="blank"):
+        Provenance(origin="user", notes="   ")
+
+
+def test_is_reproducible_requires_seed_and_corpus_hash() -> None:
+    assert not Provenance(origin="synthetic").is_reproducible
+    assert not Provenance(origin="synthetic", seed=7).is_reproducible
+    assert Provenance(
+        origin="synthetic", seed=7, corpus_hash="0123456789abcdef"
+    ).is_reproducible
+    assert not Provenance(
+        origin="user", seed=7, corpus_hash="0123456789abcdef"
+    ).is_reproducible

@@ -38,6 +38,7 @@ from hypoarena.debate import (
 )
 from hypoarena.dedup import (
     DedupReport,
+    DuplicateFinder,
 )
 from hypoarena.errors import (
     ConfigError,
@@ -51,6 +52,7 @@ from hypoarena.graph import (
 )
 from hypoarena.grounding import (
     GroundingReport,
+    GroundingVerifier,
 )
 from hypoarena.ids import (
     content_hash,
@@ -67,8 +69,12 @@ from hypoarena.serialize import (
     claim_to_line,
     corpus_from_text,
     corpus_to_lines,
+    dedup_report_from_lines,
+    dedup_report_to_lines,
     graph_from_lines,
     graph_to_lines,
+    grounding_reports_from_lines,
+    grounding_reports_to_lines,
     truth_from_lines,
     truth_to_lines,
 )
@@ -212,6 +218,8 @@ class Pipeline:
         return {
             "corpus": self.stage_corpus,
             "generate": self.stage_generate,
+            "verify": self.stage_verify,
+            "dedup": self.stage_dedup,
         }
 
     def record_usage(self, stage: str) -> None:
@@ -298,6 +306,36 @@ class Pipeline:
         self.state.graph = graph_from_lines(self.store.read_lines("graph.jsonl"))
         self.state.corpus_hash = corpus.signature()
 
+    def stage_verify(self) -> StageResult:
+        """Grade every claim in the graph against the corpus."""
+        if self.state.corpus is None:
+            raise ConfigError("verify needs the corpus stage to have run")
+        verifier = GroundingVerifier(self.state.corpus, self.config.grounding)
+        reports = verifier.verify_graph(self.state.graph)
+        self.state.reports = reports
+        self.store.write_lines(GROUNDING_ARTIFACT, grounding_reports_to_lines(reports))
+        return StageResult("verify", len(reports), (GROUNDING_ARTIFACT,))
+
+    def stage_dedup(self) -> StageResult:
+        """Cluster claim statements that restate each other."""
+        texts = {claim.claim_id: claim.statement for claim in self.state.graph.claims}
+        report = DuplicateFinder(self.config.dedup).report(texts)
+        self.state.dedup = report
+        self.store.write_lines(DEDUP_ARTIFACT, dedup_report_to_lines(report))
+        return StageResult("dedup", len(report.clusters), (DEDUP_ARTIFACT,))
+
+    def restore_verify(self) -> None:
+        """Reload grounding reports after a resume."""
+        self.state.reports = grounding_reports_from_lines(
+            self.store.read_lines(GROUNDING_ARTIFACT)
+        )
+
+    def restore_dedup(self) -> None:
+        """Reload the dedup report after a resume."""
+        self.state.dedup = dedup_report_from_lines(
+            self.store.read_lines(DEDUP_ARTIFACT)
+        )
+
     def restore_generate(self) -> None:
         """Reload the candidate claims and the graph they were added to."""
         self.state.candidates = tuple(
@@ -333,6 +371,8 @@ class Pipeline:
         loaders: dict[str, Callable[[], None]] = {
             "corpus": self.restore_corpus,
             "generate": self.restore_generate,
+            "verify": self.restore_verify,
+            "dedup": self.restore_dedup,
         }
         loader = loaders.get(stage)
         if loader is None:
@@ -403,3 +443,7 @@ def claim_from_proposal(statement: str, *, agent: str, seed: int) -> Claim | Non
 
 
 GENERATE_CONTEXT_LINES = 6
+
+
+GROUNDING_ARTIFACT = "grounding.jsonl"
+DEDUP_ARTIFACT = "dedup.jsonl"

@@ -10,6 +10,8 @@ from hypoarena.codec import (
     check_schema_version,
     dumps_line,
     loads_line,
+    optional_float,
+    optional_int,
     optional_str,
     present_value,
     reject_unknown_keys,
@@ -19,6 +21,7 @@ from hypoarena.codec import (
     require_int,
     require_keys,
     require_mapping,
+    require_mapping_list,
     require_str,
     require_str_tuple,
 )
@@ -210,3 +213,33 @@ def test_loads_line_reports_line_numbers_and_reasons() -> None:
         loads_line("{oops", field="evidence", line_number=7)
     with pytest.raises(SchemaError, match="must be a JSON object"):
         loads_line("[1, 2]", field="evidence")
+
+
+def test_optional_numerics_accept_null_and_absent_keys() -> None:
+    for mapping in ({}, {"n": None}):
+        assert optional_int(mapping, "n", field="f") is None
+        assert optional_float(mapping, "n", field="f") is None
+
+
+def test_optional_numerics_validate_when_present() -> None:
+    assert optional_int({"n": 3}, "n", field="f") == 3
+    assert optional_float({"n": 1}, "n", field="f") == 1.0
+    with pytest.raises(SchemaError, match="below the minimum"):
+        optional_int({"n": -1}, "n", field="f", minimum=0)
+    with pytest.raises(SchemaError, match="must be an integer"):
+        optional_int({"n": True}, "n", field="f")
+
+
+def test_require_mapping_list_decodes_entries_with_positions() -> None:
+    payload = {"items": [{"a": 1}, {"b": 2}]}
+    assert require_mapping_list(payload, "items", field="claim") == [{"a": 1}, {"b": 2}]
+    with pytest.raises(SchemaError) as info:
+        require_mapping_list({"items": [{"a": 1}, 5]}, "items", field="claim")
+    assert info.value.details["field"] == "claim.items[1]"
+
+
+def test_require_mapping_list_rejects_scalars() -> None:
+    with pytest.raises(SchemaError, match="must be a list"):
+        require_mapping_list({"items": "nope"}, "items", field="claim")
+    with pytest.raises(SchemaError, match="missing"):
+        require_mapping_list({}, "items", field="claim")

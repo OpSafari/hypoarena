@@ -312,3 +312,49 @@ def loads_line(
             reason=str(error),
         ) from None
     return require_mapping(payload, field=field)
+
+
+def optional_int(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    field: str,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int | None:
+    """Read ``key`` as an integer, accepting ``None`` and absent keys."""
+    if key not in mapping or mapping[key] is None:
+        return None
+    return require_int(mapping, key, field=field, minimum=minimum, maximum=maximum)
+
+
+def optional_float(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    field: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    """Read ``key`` as a finite float, accepting ``None`` and absent keys."""
+    if key not in mapping or mapping[key] is None:
+        return None
+    return require_float(mapping, key, field=field, minimum=minimum, maximum=maximum)
+
+
+def require_mapping_list(
+    mapping: Mapping[str, Any], key: str, *, field: str
+) -> list[dict[str, Any]]:
+    """Read ``key`` as a list of JSON objects, decoding each entry strictly."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise SchemaError(
+            f"{field}.{key} must be a list",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    return [
+        require_mapping(item, field=f"{field}.{key}[{index}]")
+        for index, item in enumerate(value)
+    ]

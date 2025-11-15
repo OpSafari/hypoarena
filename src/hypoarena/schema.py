@@ -5,8 +5,8 @@ Design rules used throughout this module:
 * every record is a frozen dataclass, so hashes and equality are structural;
 * ``__post_init__`` performs validation, so an invalid record cannot exist —
   constructors raise instead of returning a broken object;
-* ``to_dict``/``from_dict`` are exact inverses and go through
-  :mod:`hypoarena.codec`, which rejects unknown keys;
+* serialization lives in :mod:`hypoarena.serialize`, which is the single place
+  that knows the wire format and rejects unknown keys;
 * only top-level records (claims, evidence) carry ``schema_version``; nested
   value objects stay version-free to keep payloads small.
 """

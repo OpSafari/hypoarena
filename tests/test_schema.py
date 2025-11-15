@@ -10,6 +10,7 @@ from hypoarena.schema import (
     RELATION_OPPOSITES,
     SCHEMA_VERSION,
     Citation,
+    Claim,
     ClaimRelation,
     EvidencePolarity,
     PredictedRelation,
@@ -240,3 +241,89 @@ def test_is_reproducible_requires_seed_and_corpus_hash() -> None:
     assert not Provenance(
         origin="user", seed=7, corpus_hash="0123456789abcdef"
     ).is_reproducible
+
+
+def make_claim(**overrides: object) -> Claim:
+    payload: dict[str, object] = {
+        "claim_id": "clm_0123456789ab",
+        "statement": "Protein A increases the expression of gene B",
+        "subject": "protein A",
+        "object": "gene B expression",
+        "relation": PredictedRelation.INCREASES,
+        "scope": Scope("hek293 cells"),
+    }
+    payload.update(overrides)
+    return Claim(**payload)  # type: ignore[arg-type]
+
+
+def test_claim_accepts_a_well_formed_record() -> None:
+    claim = make_claim()
+    assert claim.variables == ("protein A", "gene B expression")
+    assert claim.is_cited is False
+    assert claim.provenance.origin == "user"
+
+
+def test_claim_rejects_malformed_ids_and_wrong_prefixes() -> None:
+    with pytest.raises(ValidationError, match="malformed"):
+        make_claim(claim_id="claim_1")
+    with pytest.raises(ValidationError, match="expected_prefix"):
+        make_claim(claim_id="evd_0123456789ab")
+
+
+def test_claim_rejects_blank_statements_and_variables() -> None:
+    with pytest.raises(ValidationError, match="statement"):
+        make_claim(statement="   ")
+    with pytest.raises(ValidationError, match="variables"):
+        make_claim(subject=" ")
+
+
+def test_claim_rejects_identical_subject_and_object() -> None:
+    with pytest.raises(ValidationError, match="must differ"):
+        make_claim(subject="Protein A", object="protein  a")
+
+
+def test_claim_rejects_wrong_field_types() -> None:
+    with pytest.raises(ValidationError, match="PredictedRelation"):
+        make_claim(relation="increases")
+    with pytest.raises(ValidationError, match="Scope"):
+        make_claim(scope="hek293 cells")
+    with pytest.raises(ValidationError, match="Provenance"):
+        make_claim(provenance="synthetic")
+
+
+def test_claim_rejects_duplicate_and_non_citation_entries() -> None:
+    citation = make_citation()
+    with pytest.raises(ValidationError, match="same span twice"):
+        make_claim(citations=(citation, citation))
+    with pytest.raises(ValidationError, match="Citation objects"):
+        make_claim(citations=("doc_0123456789ab:10:25",))
+
+
+def test_claim_rejects_blank_mechanism_but_allows_none() -> None:
+    assert make_claim(mechanism=None).mechanism is None
+    with pytest.raises(ValidationError, match="mechanism"):
+        make_claim(mechanism="  ")
+
+
+def test_claim_signature_ignores_ids_citations_and_wording_case() -> None:
+    base = make_claim()
+    restated = make_claim(
+        claim_id="clm_ffffffffffff",
+        statement="protein a INCREASES the expression of gene b",
+        citations=(make_citation(),),
+    )
+    assert base.signature() == restated.signature()
+
+
+def test_claim_signature_separates_relation_and_scope() -> None:
+    base = make_claim()
+    assert (
+        base.signature() != make_claim(relation=PredictedRelation.DECREASES).signature()
+    )
+    assert base.signature() != make_claim(scope=Scope("mice")).signature()
+
+
+def test_normalized_statement_is_lowercase_and_collapsed() -> None:
+    assert (
+        make_claim(statement="  A   Binds  B! ").normalized_statement() == "a binds b"
+    )

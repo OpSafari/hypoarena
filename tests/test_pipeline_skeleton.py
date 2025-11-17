@@ -10,7 +10,7 @@ from hypoarena.agents import ScriptedAgent
 from hypoarena.artifacts import ArtifactStore
 from hypoarena.config import RunConfig
 from hypoarena.cost import CostLedger
-from hypoarena.errors import ConfigError, ValidationError
+from hypoarena.errors import ArtifactError, ConfigError, ValidationError
 from hypoarena.runner import (
     DEFAULT_AGENT_QUALITIES,
     Pipeline,
@@ -84,6 +84,7 @@ def test_the_skeleton_exposes_shared_state_and_a_ledger(tmp_path: Path) -> None:
     assert isinstance(pipeline.state, RunState)
     assert isinstance(pipeline.ledger, CostLedger)
     assert "corpus" in pipeline.handlers()
-    pipeline.restore("corpus") if False else None
-    with pytest.raises(ConfigError, match="no restore implementation"):
-        pipeline.restore("rank")
+    assert pipeline.usage_snapshot == {}
+    # restoring a stage that has not run reports the missing artifact
+    with pytest.raises(ArtifactError):
+        pipeline.restore("verify")

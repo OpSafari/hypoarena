@@ -33,7 +33,9 @@ from hypoarena.cost import (
     CostLedger,
 )
 from hypoarena.debate import (
+    DebateLoop,
     DebateResult,
+    apply_debate,
     corpus_context,
 )
 from hypoarena.dedup import (
@@ -69,12 +71,18 @@ from hypoarena.serialize import (
     claim_to_line,
     corpus_from_text,
     corpus_to_lines,
+    debate_result_from_dict,
+    debate_result_to_dict,
     dedup_report_from_lines,
     dedup_report_to_lines,
+    dumps_line,
     graph_from_lines,
     graph_to_lines,
     grounding_reports_from_lines,
     grounding_reports_to_lines,
+    loads_line,
+    tournament_from_lines,
+    tournament_to_lines,
     truth_from_lines,
     truth_to_lines,
 )
@@ -88,7 +96,10 @@ from hypoarena.text import (
     normalize,
 )
 from hypoarena.tournament import (
+    FeatureJudge,
+    Tournament,
     TournamentResult,
+    graph_contradiction_counts,
 )
 
 DEFAULT_AGENT_QUALITIES: tuple[float, ...] = (0.9, 0.5, 0.2)
@@ -220,6 +231,8 @@ class Pipeline:
             "generate": self.stage_generate,
             "verify": self.stage_verify,
             "dedup": self.stage_dedup,
+            "debate": self.stage_debate,
+            "rank": self.stage_rank,
         }
 
     def record_usage(self, stage: str) -> None:
@@ -336,6 +349,68 @@ class Pipeline:
             self.store.read_lines(DEDUP_ARTIFACT)
         )
 
+    def debate_loop(self) -> DebateLoop:
+        """Build the debate loop from this pipeline's agents."""
+        proposer = self.agents[0]
+        critics = list(self.agents[1 : 1 + self.config.debate.critics]) or [proposer]
+        return DebateLoop(proposer, critics, self.agents[-1], self.config.debate)
+
+    def stage_debate(self) -> StageResult:
+        """Debate the agent-proposed claims and write the revisions back.
+
+        Only proposals are debated: the corpus-derived claims are already grounded
+        in a specific span, and rewriting their statements would invalidate the
+        citation they carry.
+        """
+        if self.state.corpus is None:
+            raise ConfigError("debate needs the corpus stage to have run")
+        context = corpus_context(self.state.corpus, limit=GENERATE_CONTEXT_LINES)
+        loop = self.debate_loop()
+        proposed = [
+            claim
+            for claim in self.state.graph.claims
+            if claim.provenance.notes == "proposed"
+        ][:DEBATE_CLAIM_LIMIT]
+        debates: list[DebateResult] = []
+        for claim in proposed:
+            result = loop.run(context)
+            apply_debate(self.state.graph, claim.claim_id, result)
+            debates.append(result)
+        self.record_usage("debate")
+        self.state.debates = tuple(debates)
+        self.store.write_lines(
+            DEBATE_ARTIFACT, [debate_line(result) for result in debates]
+        )
+        self.store.write_lines("graph.jsonl", graph_to_lines(self.state.graph))
+        return StageResult("debate", len(debates), (DEBATE_ARTIFACT, "graph.jsonl"))
+
+    def stage_rank(self) -> StageResult:
+        """Run the tournament over every claim currently in the graph."""
+        reports = {report.claim_id: report for report in self.state.reports}
+        judge = FeatureJudge(
+            reports=reports,
+            contradictions=graph_contradiction_counts(self.state.graph),
+        )
+        tournament = Tournament(judge, self.config.tournament).run(
+            self.state.graph.claims
+        )
+        self.state.tournament = tournament
+        self.store.write_lines(TOURNAMENT_ARTIFACT, tournament_to_lines(tournament))
+        return StageResult("rank", len(tournament.matches), (TOURNAMENT_ARTIFACT,))
+
+    def restore_debate(self) -> None:
+        """Reload debate transcripts and the revised graph."""
+        self.state.debates = tuple(
+            debate_from_line(line) for line in self.store.read_lines(DEBATE_ARTIFACT)
+        )
+        self.state.graph = graph_from_lines(self.store.read_lines("graph.jsonl"))
+
+    def restore_rank(self) -> None:
+        """Reload the tournament audit trail."""
+        self.state.tournament = tournament_from_lines(
+            self.store.read_lines(TOURNAMENT_ARTIFACT)
+        )
+
     def restore_generate(self) -> None:
         """Reload the candidate claims and the graph they were added to."""
         self.state.candidates = tuple(
@@ -373,6 +448,8 @@ class Pipeline:
             "generate": self.restore_generate,
             "verify": self.restore_verify,
             "dedup": self.restore_dedup,
+            "debate": self.restore_debate,
+            "rank": self.restore_rank,
         }
         loader = loaders.get(stage)
         if loader is None:
@@ -447,3 +524,19 @@ GENERATE_CONTEXT_LINES = 6
 
 GROUNDING_ARTIFACT = "grounding.jsonl"
 DEDUP_ARTIFACT = "dedup.jsonl"
+
+
+DEBATE_ARTIFACT = "debates.jsonl"
+TOURNAMENT_ARTIFACT = "tournament.jsonl"
+DEBATE_CLAIM_LIMIT = 6
+
+
+def debate_line(result: DebateResult) -> str:
+    """Return one JSONL line holding a whole debate transcript."""
+    return dumps_line({"record": "debate", "debate": debate_result_to_dict(result)})
+
+
+def debate_from_line(line: str) -> DebateResult:
+    """Decode one debate line."""
+    payload = loads_line(line, field="debates")
+    return debate_result_from_dict(payload["debate"], field="debates.debate")

@@ -8,7 +8,7 @@ import pytest
 
 from hypoarena.agents import ScriptedAgent
 from hypoarena.artifacts import ArtifactStore
-from hypoarena.config import RunConfig
+from hypoarena.config import STAGES, RunConfig
 from hypoarena.cost import CostLedger
 from hypoarena.errors import ArtifactError, ConfigError, ValidationError
 from hypoarena.runner import (
@@ -71,9 +71,21 @@ def test_a_pipeline_needs_agents(tmp_path: Path) -> None:
         Pipeline(config, ArtifactStore(tmp_path, "alpha"), agents=[])
 
 
-def test_unimplemented_stages_are_reported(tmp_path: Path) -> None:
-    config = RunConfig(run_id="alpha", stages=("report",))
-    pipeline = Pipeline(config, ArtifactStore(tmp_path, "alpha"))
+def test_every_configured_stage_has_an_implementation(tmp_path: Path) -> None:
+    pipeline = Pipeline(RunConfig(run_id="alpha"), ArtifactStore(tmp_path, "alpha"))
+    assert set(pipeline.handlers()) == set(STAGES)
+
+
+def test_a_stage_without_an_implementation_is_reported(tmp_path: Path) -> None:
+    class Partial(Pipeline):
+        """A pipeline that knows no stages, used to exercise the guard."""
+
+        def handlers(self) -> dict:
+            return {}
+
+    pipeline = Partial(
+        RunConfig(run_id="alpha", stages=("corpus",)), ArtifactStore(tmp_path, "alpha")
+    )
     with pytest.raises(ConfigError, match="no implementation"):
         pipeline.run()
 

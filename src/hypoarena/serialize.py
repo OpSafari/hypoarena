@@ -19,11 +19,13 @@ from hypoarena.codec import (
     check_schema_version,
     dumps_line,
     loads_line,
+    optional_float,
     optional_int,
     optional_str,
     present_value,
     reject_unknown_keys,
     require_enum,
+    require_float,
     require_int,
     require_mapping,
     require_mapping_list,
@@ -34,6 +36,8 @@ from hypoarena.schema import (
     SCHEMA_VERSION,
     Citation,
     Claim,
+    Evidence,
+    EvidencePolarity,
     PredictedRelation,
     Provenance,
     Scope,
@@ -51,6 +55,18 @@ CLAIM_KEYS = (
     "citations",
     "mechanism",
     "provenance",
+)
+EVIDENCE_KEYS = (
+    "schema_version",
+    "evidence_id",
+    "statement",
+    "polarity",
+    "strength",
+    "citations",
+    "method",
+    "provenance",
+    "effect_size",
+    "sample_size",
 )
 CITATION_KEYS = ("document_id", "start", "end", "quote")
 PROVENANCE_KEYS = (
@@ -186,3 +202,54 @@ def claim_to_line(claim: Claim) -> str:
 def claim_from_line(line: str, *, line_number: int | None = None) -> Claim:
     """Decode one JSONL line into a claim."""
     return claim_from_dict(loads_line(line, field="claim", line_number=line_number))
+
+
+def evidence_to_dict(evidence: Evidence) -> dict[str, Any]:
+    """Encode an evidence item, stamping the current schema version."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "evidence_id": evidence.evidence_id,
+        "statement": evidence.statement,
+        "polarity": evidence.polarity.value,
+        "strength": evidence.strength,
+        "citations": [citation_to_dict(citation) for citation in evidence.citations],
+        "method": evidence.method,
+        "provenance": provenance_to_dict(evidence.provenance),
+        "effect_size": evidence.effect_size,
+        "sample_size": evidence.sample_size,
+    }
+
+
+def evidence_from_dict(payload: object, *, field: str = "evidence") -> Evidence:
+    """Decode an evidence item, rejecting unknown keys and foreign versions."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, EVIDENCE_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    return Evidence(
+        evidence_id=require_str(mapping, "evidence_id", field=field),
+        statement=require_str(mapping, "statement", field=field),
+        polarity=require_enum(mapping, "polarity", EvidencePolarity, field=field),
+        strength=require_float(
+            mapping, "strength", field=field, minimum=0.0, maximum=1.0
+        ),
+        citations=citation_list_from_payload(mapping, field=field),
+        method=require_str(mapping, "method", field=field),
+        provenance=provenance_from_dict(
+            present_value(mapping, "provenance", field=field),
+            field=f"{field}.provenance",
+        ),
+        effect_size=optional_float(mapping, "effect_size", field=field),
+        sample_size=optional_int(mapping, "sample_size", field=field, minimum=1),
+    )
+
+
+def evidence_to_line(evidence: Evidence) -> str:
+    """Encode an evidence item as one canonical JSONL line."""
+    return dumps_line(evidence_to_dict(evidence))
+
+
+def evidence_from_line(line: str, *, line_number: int | None = None) -> Evidence:
+    """Decode one JSONL line into an evidence item."""
+    return evidence_from_dict(
+        loads_line(line, field="evidence", line_number=line_number)
+    )

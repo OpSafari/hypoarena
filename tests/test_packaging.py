@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,10 @@ def test_changelog_documents_the_current_version() -> None:
 
 def test_changelog_lists_the_current_version_first() -> None:
     assert changelog_headings()[0] == f"## {__version__}"
+
+
+def test_installed_metadata_matches_the_source_version() -> None:
+    assert importlib.metadata.version("hypoarena") == __version__
 
 
 def test_console_script_points_at_the_cli_module() -> None:

@@ -16,18 +16,42 @@ from __future__ import annotations
 from typing import Any
 
 from hypoarena.codec import (
+    check_schema_version,
+    dumps_line,
+    loads_line,
     optional_int,
     optional_str,
+    present_value,
     reject_unknown_keys,
+    require_enum,
     require_int,
     require_mapping,
     require_mapping_list,
     require_str,
     require_str_tuple,
 )
-from hypoarena.schema import Citation, Provenance, Scope
+from hypoarena.schema import (
+    SCHEMA_VERSION,
+    Citation,
+    Claim,
+    PredictedRelation,
+    Provenance,
+    Scope,
+)
 
 SCOPE_KEYS = ("population", "conditions")
+CLAIM_KEYS = (
+    "schema_version",
+    "claim_id",
+    "statement",
+    "subject",
+    "object",
+    "relation",
+    "scope",
+    "citations",
+    "mechanism",
+    "provenance",
+)
 CITATION_KEYS = ("document_id", "start", "end", "quote")
 PROVENANCE_KEYS = (
     "origin",
@@ -113,3 +137,52 @@ def citation_list_from_payload(
         citation_from_dict(item, field=f"{field}.{key}[{index}]")
         for index, item in enumerate(require_mapping_list(mapping, key, field=field))
     )
+
+
+def claim_to_dict(claim: Claim) -> dict[str, Any]:
+    """Encode a claim, stamping the current schema version."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "claim_id": claim.claim_id,
+        "statement": claim.statement,
+        "subject": claim.subject,
+        "object": claim.object,
+        "relation": claim.relation.value,
+        "scope": scope_to_dict(claim.scope),
+        "citations": [citation_to_dict(citation) for citation in claim.citations],
+        "mechanism": claim.mechanism,
+        "provenance": provenance_to_dict(claim.provenance),
+    }
+
+
+def claim_from_dict(payload: object, *, field: str = "claim") -> Claim:
+    """Decode a claim, rejecting unknown keys and foreign schema versions."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, CLAIM_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    return Claim(
+        claim_id=require_str(mapping, "claim_id", field=field),
+        statement=require_str(mapping, "statement", field=field),
+        subject=require_str(mapping, "subject", field=field),
+        object=require_str(mapping, "object", field=field),
+        relation=require_enum(mapping, "relation", PredictedRelation, field=field),
+        scope=scope_from_dict(
+            present_value(mapping, "scope", field=field), field=f"{field}.scope"
+        ),
+        citations=citation_list_from_payload(mapping, field=field),
+        mechanism=optional_str(mapping, "mechanism", field=field),
+        provenance=provenance_from_dict(
+            present_value(mapping, "provenance", field=field),
+            field=f"{field}.provenance",
+        ),
+    )
+
+
+def claim_to_line(claim: Claim) -> str:
+    """Encode a claim as one canonical JSONL line."""
+    return dumps_line(claim_to_dict(claim))
+
+
+def claim_from_line(line: str, *, line_number: int | None = None) -> Claim:
+    """Decode one JSONL line into a claim."""
+    return claim_from_dict(loads_line(line, field="claim", line_number=line_number))

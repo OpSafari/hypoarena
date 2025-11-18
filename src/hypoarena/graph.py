@@ -12,11 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from hypoarena.errors import (
+    DuplicateIdError,
+    UnknownReferenceError,
     ValidationError,
 )
 from hypoarena.ids import is_valid_id
 from hypoarena.schema import (
     CLAIM_ID_PREFIX,
+    Claim,
     ClaimRelation,
 )
 
@@ -62,3 +65,55 @@ class ClaimEdge:
     def touches(self, claim_id: str) -> bool:
         """True when the edge starts or ends at ``claim_id``."""
         return claim_id in (self.source, self.target)
+
+
+class HypothesisGraph:
+    """Mutable collection of claims, evidence, links and typed claim relations.
+
+    Identifiers are unique per record type: adding a second claim with an
+    existing id raises :class:`~hypoarena.errors.DuplicateIdError` even when the
+    payload is identical, because a silent overwrite would destroy provenance.
+    Iteration order is always sorted by identifier, so serialized output and
+    derived statistics do not depend on insertion order.
+    """
+
+    def __init__(self) -> None:
+        self._claims: dict[str, Claim] = {}
+
+    def add_claim(self, claim: Claim) -> Claim:
+        """Insert ``claim`` and return it."""
+        if not isinstance(claim, Claim):
+            raise ValidationError(
+                "graph claims must be Claim objects", got=type(claim).__name__
+            )
+        if claim.claim_id in self._claims:
+            raise DuplicateIdError(claim.claim_id, "claim")
+        self._claims[claim.claim_id] = claim
+        return claim
+
+    def has_claim(self, claim_id: str) -> bool:
+        """True when a claim with this identifier is present."""
+        return claim_id in self._claims
+
+    def claim(self, claim_id: str) -> Claim:
+        """Return the claim with ``claim_id`` or raise ``UnknownReferenceError``."""
+        try:
+            return self._claims[claim_id]
+        except KeyError:
+            raise UnknownReferenceError(claim_id, "claim") from None
+
+    @property
+    def claim_ids(self) -> tuple[str, ...]:
+        """All claim identifiers in sorted order."""
+        return tuple(sorted(self._claims))
+
+    @property
+    def claims(self) -> tuple[Claim, ...]:
+        """All claims ordered by identifier."""
+        return tuple(self._claims[claim_id] for claim_id in self.claim_ids)
+
+    def __len__(self) -> int:
+        return len(self._claims)
+
+    def __contains__(self, claim_id: object) -> bool:
+        return isinstance(claim_id, str) and claim_id in self._claims

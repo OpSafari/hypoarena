@@ -50,5 +50,8 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | `hypoarena.errors` | 异常层级与稳定错误码，供 CLI 退出码使用 |
 | `hypoarena.ids` | 确定性内容哈希与 ID 构造，支撑 provenance 与 golden 测试 |
 | `hypoarena.text` | 归一化、分词、n-gram、数字与否定线索提取 |
+| `hypoarena.codec` | 严格解码与规范 JSONL 行编码 |
+| `hypoarena.schema` | Claim / Evidence / Citation / Scope / Provenance 记录与校验 |
+| `hypoarena.serialize` | 记录与 JSON 载荷之间的编解码层 |
 
 模块表随实现推进补充；接口约定见 [api.md](api.md)。

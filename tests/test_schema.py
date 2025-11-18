@@ -12,6 +12,7 @@ from hypoarena.schema import (
     Citation,
     Claim,
     ClaimRelation,
+    Evidence,
     EvidencePolarity,
     PredictedRelation,
     Provenance,
@@ -327,3 +328,70 @@ def test_normalized_statement_is_lowercase_and_collapsed() -> None:
     assert (
         make_claim(statement="  A   Binds  B! ").normalized_statement() == "a binds b"
     )
+
+
+def make_evidence(**overrides: object) -> Evidence:
+    payload: dict[str, object] = {
+        "evidence_id": "evd_0123456789ab",
+        "statement": "ChIP-seq shows binding enrichment at the promoter",
+        "polarity": EvidencePolarity.SUPPORT,
+        "strength": 0.8,
+        "citations": (make_citation(),),
+        "method": "synthetic_finding",
+        "provenance": Provenance(origin="synthetic", seed=270106),
+    }
+    payload.update(overrides)
+    return Evidence(**payload)  # type: ignore[arg-type]
+
+
+def test_evidence_accepts_a_well_formed_record() -> None:
+    evidence = make_evidence()
+    assert evidence.weighted_polarity == pytest.approx(0.8)
+    assert make_evidence(
+        polarity=EvidencePolarity.REFUTE
+    ).weighted_polarity == pytest.approx(-0.8)
+
+
+def test_neutral_evidence_carries_zero_weight() -> None:
+    evidence = make_evidence(polarity=EvidencePolarity.NEUTRAL, strength=0.0)
+    assert evidence.weighted_polarity == 0.0
+    with pytest.raises(ValidationError, match="zero strength"):
+        make_evidence(polarity=EvidencePolarity.NEUTRAL, strength=0.4)
+
+
+def test_evidence_strength_bounds_are_inclusive_and_enforced() -> None:
+    assert make_evidence(strength=0.0).strength == 0.0
+    assert make_evidence(strength=1.0).strength == 1.0
+    for bad in (-0.01, 1.01, float("nan")):
+        with pytest.raises(ValidationError, match="strength"):
+            make_evidence(strength=bad)
+
+
+def test_evidence_rejects_integer_strength() -> None:
+    with pytest.raises(ValidationError, match="finite float"):
+        make_evidence(strength=1)
+
+
+def test_evidence_requires_citations_and_rejects_duplicates() -> None:
+    with pytest.raises(ValidationError, match="at least one corpus span"):
+        make_evidence(citations=())
+    citation = make_citation()
+    with pytest.raises(ValidationError, match="same span twice"):
+        make_evidence(citations=(citation, citation))
+
+
+def test_evidence_rejects_malformed_ids_and_blank_fields() -> None:
+    with pytest.raises(ValidationError, match="malformed"):
+        make_evidence(evidence_id="clm_0123456789ab")
+    with pytest.raises(ValidationError, match="statement"):
+        make_evidence(statement=" ")
+    with pytest.raises(ValidationError, match="method"):
+        make_evidence(method="")
+
+
+def test_evidence_validates_optional_quantities() -> None:
+    assert make_evidence(sample_size=12, effect_size=-0.5).sample_size == 12
+    with pytest.raises(ValidationError, match="sample_size"):
+        make_evidence(sample_size=0)
+    with pytest.raises(ValidationError, match="effect_size"):
+        make_evidence(effect_size=float("inf"))

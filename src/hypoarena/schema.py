@@ -13,6 +13,7 @@ Design rules used throughout this module:
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -383,3 +384,93 @@ class Claim:
                 "scope": self.scope.signature(),
             }
         )
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """A graded observation drawn from the corpus.
+
+    ``strength`` is a confidence weight in ``[0, 1]``; ``polarity`` says whether
+    the observation supports or refutes the claim it is linked to. Neutral
+    evidence must carry zero strength, because a neutral item contributes no
+    weight to belief updating and pretending otherwise would silently bias the
+    posterior. Every evidence item must cite at least one span: unverifiable
+    assertions belong in a claim, not in the evidence set.
+    """
+
+    evidence_id: str
+    statement: str
+    polarity: EvidencePolarity
+    strength: float
+    citations: tuple[Citation, ...]
+    method: str
+    provenance: Provenance
+    effect_size: float | None = None
+    sample_size: int | None = None
+
+    def __post_init__(self) -> None:
+        check_record_id(self.evidence_id, EVIDENCE_ID_PREFIX, "evidence")
+        if not self.statement.strip():
+            raise ValidationError(
+                "evidence statement must not be blank", evidence_id=self.evidence_id
+            )
+        if not isinstance(self.polarity, EvidencePolarity):
+            raise ValidationError(
+                "evidence polarity must be an EvidencePolarity",
+                evidence_id=self.evidence_id,
+                got=type(self.polarity).__name__,
+            )
+        if not isinstance(self.strength, float) or not math.isfinite(self.strength):
+            raise ValidationError(
+                "evidence strength must be a finite float",
+                evidence_id=self.evidence_id,
+                strength=self.strength,
+            )
+        if not 0.0 <= self.strength <= 1.0:
+            raise ValidationError(
+                "evidence strength must lie within [0, 1]",
+                evidence_id=self.evidence_id,
+                strength=self.strength,
+            )
+        if self.polarity is EvidencePolarity.NEUTRAL and self.strength != 0.0:
+            raise ValidationError(
+                "neutral evidence must have zero strength",
+                evidence_id=self.evidence_id,
+                strength=self.strength,
+            )
+        if not self.citations:
+            raise ValidationError(
+                "evidence must cite at least one corpus span",
+                evidence_id=self.evidence_id,
+            )
+        check_unique_citations(self.citations, "evidence")
+        if not self.method.strip():
+            raise ValidationError(
+                "evidence method must not be blank", evidence_id=self.evidence_id
+            )
+        if not isinstance(self.provenance, Provenance):
+            raise ValidationError(
+                "evidence provenance must be a Provenance",
+                evidence_id=self.evidence_id,
+            )
+        if self.sample_size is not None and self.sample_size < 1:
+            raise ValidationError(
+                "evidence sample_size must be >= 1",
+                evidence_id=self.evidence_id,
+                sample_size=self.sample_size,
+            )
+        if self.effect_size is not None and not math.isfinite(self.effect_size):
+            raise ValidationError(
+                "evidence effect_size must be finite",
+                evidence_id=self.evidence_id,
+                effect_size=self.effect_size,
+            )
+
+    @property
+    def weighted_polarity(self) -> float:
+        """Signed weight in ``[-1, 1]`` used by belief accumulation."""
+        if self.polarity is EvidencePolarity.SUPPORT:
+            return self.strength
+        if self.polarity is EvidencePolarity.REFUTE:
+            return -self.strength
+        return 0.0

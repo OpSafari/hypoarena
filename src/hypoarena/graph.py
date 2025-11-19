@@ -84,6 +84,8 @@ class HypothesisGraph:
         self._evidence: dict[str, Evidence] = {}
         self._links: dict[str, list[str]] = {}
         self._backlinks: dict[str, list[str]] = {}
+        self._edges: dict[str, list[ClaimEdge]] = {}
+        self._incoming: dict[str, list[ClaimEdge]] = {}
 
     def add_claim(self, claim: Claim) -> Claim:
         """Insert ``claim`` and return it."""
@@ -198,3 +200,72 @@ class HypothesisGraph:
     def link_count(self) -> int:
         """Total number of claim–evidence links."""
         return sum(len(items) for items in self._links.values())
+
+    def add_edge(
+        self,
+        source: str,
+        target: str,
+        relation: ClaimRelation,
+        note: str | None = None,
+    ) -> ClaimEdge:
+        """Insert a typed relation between two claims that must already exist.
+
+        Duplicate edges are rejected rather than merged, and ``contradicts`` is
+        treated as symmetric: adding ``b contradicts a`` after ``a contradicts b``
+        is the same assertion, not a new one.
+        """
+        self.claim(source)
+        self.claim(target)
+        edge = ClaimEdge(source, target, relation, note=note)
+        if self.has_edge(source, target, relation):
+            raise GraphInvariantError("edge already exists", edge=list(edge.key()))
+        if relation is ClaimRelation.CONTRADICTS and self.has_edge(
+            target, source, relation
+        ):
+            raise GraphInvariantError(
+                "contradiction edges are symmetric", edge=list(edge.key())
+            )
+        self._edges.setdefault(source, []).append(edge)
+        self._incoming.setdefault(target, []).append(edge)
+        return edge
+
+    def has_edge(self, source: str, target: str, relation: ClaimRelation) -> bool:
+        """True when exactly this typed relation is present."""
+        wanted = (source, target, relation.value)
+        return any(edge.key() == wanted for edge in self._edges.get(source, ()))
+
+    def edge_between(
+        self, source: str, target: str, relation: ClaimRelation
+    ) -> ClaimEdge:
+        """Return the matching edge or raise ``UnknownReferenceError``."""
+        for edge in self._edges.get(source, ()):
+            if edge.key() == (source, target, relation.value):
+                return edge
+        raise UnknownReferenceError(
+            f"{source}->{target}:{relation.value}", "edge", owner=source
+        )
+
+    @property
+    def edges(self) -> tuple[ClaimEdge, ...]:
+        """All edges in canonical (source, target, relation) order."""
+        return tuple(
+            sorted(
+                (edge for group in self._edges.values() for edge in group),
+                key=lambda edge: edge.key(),
+            )
+        )
+
+    @property
+    def edge_count(self) -> int:
+        """Number of typed claim relations."""
+        return sum(len(group) for group in self._edges.values())
+
+    def remove_edge(self, edge: ClaimEdge) -> None:
+        """Delete an edge from both indexes."""
+        group = self._edges.get(edge.source, [])
+        if edge not in group:
+            raise UnknownReferenceError(
+                "->".join(edge.endpoints()), "edge", owner=edge.source
+            )
+        group.remove(edge)
+        self._incoming[edge.target].remove(edge)

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from hypoarena.errors import (
     DuplicateIdError,
+    GraphInvariantError,
     UnknownReferenceError,
     ValidationError,
 )
@@ -21,6 +22,7 @@ from hypoarena.schema import (
     CLAIM_ID_PREFIX,
     Claim,
     ClaimRelation,
+    Evidence,
 )
 
 
@@ -79,6 +81,9 @@ class HypothesisGraph:
 
     def __init__(self) -> None:
         self._claims: dict[str, Claim] = {}
+        self._evidence: dict[str, Evidence] = {}
+        self._links: dict[str, list[str]] = {}
+        self._backlinks: dict[str, list[str]] = {}
 
     def add_claim(self, claim: Claim) -> Claim:
         """Insert ``claim`` and return it."""
@@ -117,3 +122,79 @@ class HypothesisGraph:
 
     def __contains__(self, claim_id: object) -> bool:
         return isinstance(claim_id, str) and claim_id in self._claims
+
+    def add_evidence(self, evidence: Evidence) -> Evidence:
+        """Insert ``evidence`` and return it."""
+        if not isinstance(evidence, Evidence):
+            raise ValidationError(
+                "graph evidence must be Evidence objects", got=type(evidence).__name__
+            )
+        if evidence.evidence_id in self._evidence:
+            raise DuplicateIdError(evidence.evidence_id, "evidence")
+        self._evidence[evidence.evidence_id] = evidence
+        return evidence
+
+    def has_evidence(self, evidence_id: str) -> bool:
+        """True when an evidence item with this identifier is present."""
+        return evidence_id in self._evidence
+
+    def evidence(self, evidence_id: str) -> Evidence:
+        """Return the evidence item or raise ``UnknownReferenceError``."""
+        try:
+            return self._evidence[evidence_id]
+        except KeyError:
+            raise UnknownReferenceError(evidence_id, "evidence") from None
+
+    @property
+    def evidence_ids(self) -> tuple[str, ...]:
+        """All evidence identifiers in sorted order."""
+        return tuple(sorted(self._evidence))
+
+    @property
+    def evidence_items(self) -> tuple[Evidence, ...]:
+        """All evidence items ordered by identifier."""
+        return tuple(self._evidence[item] for item in self.evidence_ids)
+
+    def link_evidence(self, claim_id: str, evidence_id: str) -> None:
+        """Attach an evidence item to a claim.
+
+        Both endpoints must already exist, and a link cannot be created twice:
+        double counting one observation would silently inflate its weight during
+        belief accumulation.
+        """
+        self.claim(claim_id)
+        self.evidence(evidence_id)
+        linked = self._links.setdefault(claim_id, [])
+        if evidence_id in linked:
+            raise GraphInvariantError(
+                "evidence is already linked to this claim",
+                claim_id=claim_id,
+                evidence_id=evidence_id,
+            )
+        linked.append(evidence_id)
+        self._backlinks.setdefault(evidence_id, []).append(claim_id)
+
+    def unlink_evidence(self, claim_id: str, evidence_id: str) -> None:
+        """Remove a link, raising when it does not exist."""
+        linked = self._links.get(claim_id, [])
+        if evidence_id not in linked:
+            raise UnknownReferenceError(
+                f"{claim_id}->{evidence_id}", "evidence link", owner=claim_id
+            )
+        linked.remove(evidence_id)
+        self._backlinks[evidence_id].remove(claim_id)
+
+    def evidence_for(self, claim_id: str) -> tuple[Evidence, ...]:
+        """Evidence attached to a claim, in link order."""
+        self.claim(claim_id)
+        return tuple(self._evidence[item] for item in self._links.get(claim_id, ()))
+
+    def claims_for_evidence(self, evidence_id: str) -> tuple[str, ...]:
+        """Claim identifiers an evidence item is attached to, sorted."""
+        self.evidence(evidence_id)
+        return tuple(sorted(self._backlinks.get(evidence_id, ())))
+
+    @property
+    def link_count(self) -> int:
+        """Total number of claim–evidence links."""
+        return sum(len(items) for items in self._links.values())

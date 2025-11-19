@@ -346,3 +346,54 @@ class HypothesisGraph:
     def leaves(self) -> tuple[str, ...]:
         """Claims with no outgoing relations, sorted."""
         return tuple(cid for cid in self.claim_ids if not self._edges.get(cid))
+
+    def replace_claim(self, claim: Claim) -> Claim:
+        """Swap the payload stored under an existing identifier.
+
+        Links and edges are preserved, which is what evolution operators need:
+        a refined claim keeps the evidence and relations of the claim it revises.
+        """
+        if not isinstance(claim, Claim):
+            raise ValidationError(
+                "graph claims must be Claim objects", got=type(claim).__name__
+            )
+        if claim.claim_id not in self._claims:
+            raise UnknownReferenceError(claim.claim_id, "claim")
+        self._claims[claim.claim_id] = claim
+        return claim
+
+    def remove_claim(self, claim_id: str) -> Claim:
+        """Delete a claim plus every edge and evidence link that touches it.
+
+        Evidence items are kept: the same observation can back other claims. The
+        cascade is what keeps the graph valid after removals, and
+        :meth:`validate` proves it.
+        """
+        claim = self.claim(claim_id)
+        for edge in (*self.outgoing(claim_id), *self.incoming(claim_id)):
+            self.remove_edge(edge)
+        for evidence_id in tuple(self._links.get(claim_id, ())):
+            self.unlink_evidence(claim_id, evidence_id)
+        self._links.pop(claim_id, None)
+        self._edges.pop(claim_id, None)
+        self._incoming.pop(claim_id, None)
+        del self._claims[claim_id]
+        return claim
+
+    def remove_evidence(self, evidence_id: str) -> Evidence:
+        """Delete an evidence item and every link pointing at it."""
+        evidence = self.evidence(evidence_id)
+        for claim_id in tuple(self._backlinks.get(evidence_id, ())):
+            self.unlink_evidence(claim_id, evidence_id)
+        self._backlinks.pop(evidence_id, None)
+        del self._evidence[evidence_id]
+        return evidence
+
+    def clear(self) -> None:
+        """Drop every record and index."""
+        self._claims.clear()
+        self._evidence.clear()
+        self._links.clear()
+        self._backlinks.clear()
+        self._edges.clear()
+        self._incoming.clear()

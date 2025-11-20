@@ -49,6 +49,7 @@ from hypoarena.codec import (
 )
 from hypoarena.config import RunConfig
 from hypoarena.corpus import Corpus, Document
+from hypoarena.cost import CostEntry, CostLedger
 from hypoarena.debate import Critique, DebateConfig, DebateResult, DebateTurn
 from hypoarena.dedup import DedupConfig, DedupReport, DuplicateCluster
 from hypoarena.errors import ArtifactError, SchemaError
@@ -2719,3 +2720,68 @@ def run_config_from_dict(payload: object, *, field: str = "config") -> RunConfig
             present_value(mapping, "evolution", field=field), field=f"{field}.evolution"
         ),
     )
+
+
+COST_ENTRY_KEYS = (
+    "stage",
+    "agent",
+    "calls",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+)
+COST_LEDGER_KEYS = ("entries", "totals", "by_stage")
+
+
+def cost_entry_to_dict(entry: CostEntry) -> dict[str, Any]:
+    """Encode one ledger entry."""
+    return dict(entry.as_dict())
+
+
+def cost_entry_from_dict(payload: object, *, field: str = "entry") -> CostEntry:
+    """Decode one ledger entry."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, COST_ENTRY_KEYS, field=field)
+    return CostEntry(
+        stage=require_str(mapping, "stage", field=field),
+        agent=require_str(mapping, "agent", field=field),
+        calls=require_int(mapping, "calls", field=field, minimum=0),
+        prompt_tokens=require_int(mapping, "prompt_tokens", field=field, minimum=0),
+        completion_tokens=require_int(
+            mapping, "completion_tokens", field=field, minimum=0
+        ),
+    )
+
+
+def cost_ledger_to_dict(ledger: CostLedger) -> dict[str, Any]:
+    """Encode a whole ledger; totals are recomputed and checked on decode."""
+    return {
+        "entries": [cost_entry_to_dict(entry) for entry in ledger.entries],
+        "totals": ledger.totals(),
+        "by_stage": ledger.by_stage(),
+    }
+
+
+def cost_ledger_from_dict(payload: object, *, field: str = "ledger") -> CostLedger:
+    """Decode a ledger, verifying the stored totals against its entries."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, COST_LEDGER_KEYS, field=field)
+    ledger = CostLedger(
+        entries=[
+            cost_entry_from_dict(item, field=f"{field}.entries[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "entries", field=field)
+            )
+        ]
+    )
+    stored = require_mapping(
+        present_value(mapping, "totals", field=field), field=f"{field}.totals"
+    )
+    if dict(stored) != ledger.totals():
+        raise SchemaError(
+            "ledger totals disagree with its entries",
+            field=field,
+            stored=dict(stored),
+            computed=ledger.totals(),
+        )
+    return ledger

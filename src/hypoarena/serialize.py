@@ -32,10 +32,12 @@ from hypoarena.codec import (
     require_str,
     require_str_tuple,
 )
+from hypoarena.graph import ClaimEdge, HypothesisGraph
 from hypoarena.schema import (
     SCHEMA_VERSION,
     Citation,
     Claim,
+    ClaimRelation,
     Evidence,
     EvidencePolarity,
     PredictedRelation,
@@ -253,3 +255,70 @@ def evidence_from_line(line: str, *, line_number: int | None = None) -> Evidence
     return evidence_from_dict(
         loads_line(line, field="evidence", line_number=line_number)
     )
+
+
+EDGE_KEYS = ("source", "target", "relation", "note")
+GRAPH_KEYS = ("schema_version", "claims", "evidence", "links", "edges")
+LINK_KEYS = ("claim_id", "evidence_id")
+
+
+def edge_to_dict(edge: ClaimEdge) -> dict[str, Any]:
+    """Encode a typed claim relation."""
+    return {
+        "source": edge.source,
+        "target": edge.target,
+        "relation": edge.relation.value,
+        "note": edge.note,
+    }
+
+
+def edge_from_dict(payload: object, *, field: str = "edge") -> ClaimEdge:
+    """Decode a typed claim relation."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, EDGE_KEYS, field=field)
+    return ClaimEdge(
+        source=require_str(mapping, "source", field=field),
+        target=require_str(mapping, "target", field=field),
+        relation=require_enum(mapping, "relation", ClaimRelation, field=field),
+        note=optional_str(mapping, "note", field=field),
+    )
+
+
+def graph_to_dict(graph: HypothesisGraph) -> dict[str, Any]:
+    """Encode a whole graph, using canonical ordering for every collection."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "claims": [claim_to_dict(claim) for claim in graph.claims],
+        "evidence": [evidence_to_dict(item) for item in graph.evidence_items],
+        "links": [
+            {"claim_id": claim_id, "evidence_id": evidence_id}
+            for claim_id, evidence_id in graph.link_pairs()
+        ],
+        "edges": [edge_to_dict(edge) for edge in graph.edges],
+    }
+
+
+def graph_from_dict(payload: object, *, field: str = "graph") -> HypothesisGraph:
+    """Decode a graph, validating every nested record and the final structure."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, GRAPH_KEYS, field=field)
+    check_schema_version(mapping, field=field, expected=SCHEMA_VERSION)
+    graph = HypothesisGraph()
+    for index, item in enumerate(require_mapping_list(mapping, "claims", field=field)):
+        graph.add_claim(claim_from_dict(item, field=f"{field}.claims[{index}]"))
+    for index, item in enumerate(
+        require_mapping_list(mapping, "evidence", field=field)
+    ):
+        graph.add_evidence(evidence_from_dict(item, field=f"{field}.evidence[{index}]"))
+    for index, item in enumerate(require_mapping_list(mapping, "links", field=field)):
+        link_field = f"{field}.links[{index}]"
+        reject_unknown_keys(item, LINK_KEYS, field=link_field)
+        graph.link_evidence(
+            require_str(item, "claim_id", field=link_field),
+            require_str(item, "evidence_id", field=link_field),
+        )
+    for index, item in enumerate(require_mapping_list(mapping, "edges", field=field)):
+        edge = edge_from_dict(item, field=f"{field}.edges[{index}]")
+        graph.add_edge(edge.source, edge.target, edge.relation, note=edge.note)
+    graph.validate()
+    return graph

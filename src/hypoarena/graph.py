@@ -9,6 +9,7 @@ every operator in the toolkit can prove it preserved validity.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from hypoarena.errors import (
@@ -488,3 +489,86 @@ class HypothesisGraph:
                     raise GraphInvariantError(
                         "edge index is missing an incoming edge", edge=list(edge.key())
                     )
+
+    def link_pairs(self) -> tuple[tuple[str, str], ...]:
+        """All (claim, evidence) links in sorted order."""
+        return tuple(
+            (claim_id, evidence_id)
+            for claim_id in sorted(self._links)
+            for evidence_id in sorted(self._links[claim_id])
+        )
+
+    def subgraph(
+        self, claim_ids: Iterable[str], *, include_evidence: bool = True
+    ) -> HypothesisGraph:
+        """Return a new graph restricted to the given claims.
+
+        Edges survive only when both endpoints are selected. Evidence is copied by
+        reference (records are immutable) and links are kept for selected claims,
+        so a debate or evolution round can work on a slice without losing the
+        observations behind it.
+        """
+        wanted = set(claim_ids)
+        for claim_id in wanted:
+            self.claim(claim_id)
+        result = HypothesisGraph()
+        for claim_id in sorted(wanted):
+            result.add_claim(self._claims[claim_id])
+        if include_evidence:
+            for claim_id in sorted(wanted):
+                for evidence in self.evidence_for(claim_id):
+                    if not result.has_evidence(evidence.evidence_id):
+                        result.add_evidence(evidence)
+                    result.link_evidence(claim_id, evidence.evidence_id)
+        for edge in self.edges:
+            if edge.source in wanted and edge.target in wanted:
+                result.add_edge(edge.source, edge.target, edge.relation, note=edge.note)
+        result.validate()
+        return result
+
+    def merge(self, other: HypothesisGraph) -> int:
+        """Copy ``other`` into this graph and return how many records were added.
+
+        Records that already exist with identical content are skipped; an
+        identifier present in both graphs with *different* content is a conflict
+        and raises, because silently picking one side would fabricate provenance.
+        """
+        added = 0
+        for claim in other.claims:
+            if self.has_claim(claim.claim_id):
+                if self.claim(claim.claim_id) != claim:
+                    raise GraphInvariantError(
+                        "conflicting claim during merge", claim_id=claim.claim_id
+                    )
+                continue
+            self.add_claim(claim)
+            added += 1
+        for evidence in other.evidence_items:
+            if self.has_evidence(evidence.evidence_id):
+                if self.evidence(evidence.evidence_id) != evidence:
+                    raise GraphInvariantError(
+                        "conflicting evidence during merge",
+                        evidence_id=evidence.evidence_id,
+                    )
+                continue
+            self.add_evidence(evidence)
+            added += 1
+        for claim_id, evidence_id in other.link_pairs():
+            if evidence_id in self._links.get(claim_id, ()):
+                continue
+            self.link_evidence(claim_id, evidence_id)
+            added += 1
+        for edge in other.edges:
+            if self.has_edge(edge.source, edge.target, edge.relation):
+                continue
+            self.add_edge(edge.source, edge.target, edge.relation, note=edge.note)
+            added += 1
+        self.validate()
+        return added
+
+    def merged(self, other: HypothesisGraph) -> HypothesisGraph:
+        """Return a new graph containing both graphs' records."""
+        result = HypothesisGraph()
+        result.merge(self)
+        result.merge(other)
+        return result

@@ -18,7 +18,7 @@ from hypoarena.errors import (
     UnknownReferenceError,
     ValidationError,
 )
-from hypoarena.ids import is_valid_id
+from hypoarena.ids import content_hash, is_valid_id
 from hypoarena.schema import (
     CLAIM_ID_PREFIX,
     Claim,
@@ -498,6 +498,61 @@ class HypothesisGraph:
             for evidence_id in sorted(self._links[claim_id])
         )
 
+    def stats(self) -> GraphStats:
+        """Summarize the graph shape for reports and CLI output."""
+        counts: dict[str, int] = {}
+        for edge in self.edges:
+            counts[edge.relation.value] = counts.get(edge.relation.value, 0) + 1
+        isolated = sum(
+            1
+            for claim_id in self.claim_ids
+            if not self._links.get(claim_id)
+            and not self._edges.get(claim_id)
+            and not self._incoming.get(claim_id)
+        )
+        return GraphStats(
+            claims=len(self._claims),
+            evidence=len(self._evidence),
+            links=self.link_count,
+            edges=self.edge_count,
+            edges_by_relation=tuple(sorted(counts.items())),
+            isolated_claims=isolated,
+            roots=len(self.roots()),
+            leaves=len(self.leaves()),
+        )
+
+    def signature(self) -> str:
+        """Return a content digest covering every record, link and edge.
+
+        Two graphs with equal content have equal signatures regardless of the
+        order records were added, which makes the value usable as a run-metadata
+        fingerprint and as a cheap equality pre-check.
+        """
+        return content_hash(
+            {
+                "claims": [
+                    [claim.claim_id, claim.signature()] for claim in self.claims
+                ],
+                "evidence": [
+                    [
+                        item.evidence_id,
+                        content_hash(
+                            {
+                                "statement": item.statement,
+                                "polarity": item.polarity.value,
+                                "strength": item.strength,
+                                "method": item.method,
+                                "citations": [list(c.key()) for c in item.citations],
+                            }
+                        ),
+                    ]
+                    for item in self.evidence_items
+                ],
+                "links": [list(pair) for pair in self.link_pairs()],
+                "edges": [list(edge.key()) for edge in self.edges],
+            }
+        )
+
     def subgraph(
         self, claim_ids: Iterable[str], *, include_evidence: bool = True
     ) -> HypothesisGraph:
@@ -572,3 +627,30 @@ class HypothesisGraph:
         result.merge(self)
         result.merge(other)
         return result
+
+
+@dataclass(frozen=True)
+class GraphStats:
+    """A small, ordered summary of graph shape used by reports and the CLI."""
+
+    claims: int
+    evidence: int
+    links: int
+    edges: int
+    edges_by_relation: tuple[tuple[str, int], ...]
+    isolated_claims: int
+    roots: int
+    leaves: int
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view with relation counts as an object."""
+        return {
+            "claims": self.claims,
+            "evidence": self.evidence,
+            "links": self.links,
+            "edges": self.edges,
+            "edges_by_relation": dict(self.edges_by_relation),
+            "isolated_claims": self.isolated_claims,
+            "roots": self.roots,
+            "leaves": self.leaves,
+        }

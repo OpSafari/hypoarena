@@ -76,6 +76,7 @@ from hypoarena.schema import (
     Provenance,
     Scope,
 )
+from hypoarena.stages import RunSummary, StageResult
 from hypoarena.synthetic import (
     PlantedChain,
     PlantedCluster,
@@ -2785,3 +2786,43 @@ def cost_ledger_from_dict(payload: object, *, field: str = "ledger") -> CostLedg
             computed=ledger.totals(),
         )
     return ledger
+
+
+STAGE_RESULT_KEYS = ("stage", "records", "artifacts", "skipped")
+RUN_SUMMARY_KEYS = (
+    "run_id",
+    "config_fingerprint",
+    "completed",
+    "stages",
+    "executed",
+    "skipped",
+)
+
+
+def stage_result_from_dict(payload: object, *, field: str = "stage") -> StageResult:
+    """Decode one stage result."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, STAGE_RESULT_KEYS, field=field)
+    return StageResult(
+        stage=require_str(mapping, "stage", field=field),
+        records=require_int(mapping, "records", field=field, minimum=0),
+        artifacts=require_str_tuple(mapping, "artifacts", field=field),
+        skipped=require_bool(mapping, "skipped", field=field),
+    )
+
+
+def run_summary_from_dict(payload: object, *, field: str = "summary") -> RunSummary:
+    """Decode a run summary written by the pipeline."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, RUN_SUMMARY_KEYS, field=field)
+    return RunSummary(
+        run_id=require_str(mapping, "run_id", field=field),
+        config_fingerprint=require_str(mapping, "config_fingerprint", field=field),
+        completed=require_bool(mapping, "completed", field=field),
+        stages=tuple(
+            stage_result_from_dict(item, field=f"{field}.stages[{index}]")
+            for index, item in enumerate(
+                require_mapping_list(mapping, "stages", field=field)
+            )
+        ),
+    )

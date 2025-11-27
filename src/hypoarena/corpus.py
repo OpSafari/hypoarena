@@ -16,6 +16,9 @@ from hypoarena.errors import (
 from hypoarena.ids import (
     is_valid_id,
 )
+from hypoarena.schema import (
+    Citation,
+)
 
 DOCUMENT_ID_PREFIX = "doc"
 
@@ -93,3 +96,33 @@ class Document:
     def attribute_map(self) -> dict[str, str]:
         """Return the metadata as a plain dictionary."""
         return dict(self.attributes)
+
+    def find_all(self, needle: str) -> list[int]:
+        """Return every start offset where ``needle`` occurs, in order."""
+        if not needle:
+            return []
+        offsets = []
+        start = self.text.find(needle)
+        while start != -1:
+            offsets.append(start)
+            start = self.text.find(needle, start + 1)
+        return offsets
+
+    def locate(self, quote: str) -> tuple[int, int] | None:
+        """Return the half-open span of the first occurrence, or ``None``."""
+        offsets = self.find_all(quote)
+        if not offsets:
+            return None
+        return (offsets[0], offsets[0] + len(quote))
+
+    def contains_span(self, citation: Citation) -> bool:
+        """True when the citation's offsets hold exactly the quoted text."""
+        if citation.document_id != self.document_id:
+            return False
+        if citation.end > len(self.text) or citation.start < 0:
+            return False
+        return self.text[citation.start : citation.end] == citation.quote
+
+    def citation_spans(self, quote: str) -> list[tuple[int, int]]:
+        """Return every span in which ``quote`` occurs verbatim."""
+        return [(start, start + len(quote)) for start in self.find_all(quote)]

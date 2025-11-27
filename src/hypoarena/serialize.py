@@ -13,7 +13,9 @@ can pin. Conventions:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import os
+from collections.abc import Iterable, Iterator, Mapping
+from pathlib import Path
 from typing import Any
 
 from hypoarena.codec import (
@@ -33,7 +35,7 @@ from hypoarena.codec import (
     require_str,
     require_str_tuple,
 )
-from hypoarena.errors import SchemaError
+from hypoarena.errors import ArtifactError, SchemaError
 from hypoarena.graph import ClaimEdge, HypothesisGraph
 from hypoarena.schema import (
     SCHEMA_VERSION,
@@ -463,3 +465,64 @@ def graph_from_lines(
 def graph_from_text(text: str, *, verify_meta: bool = True) -> HypothesisGraph:
     """Rebuild a graph from a JSONL document string."""
     return graph_from_lines(text.splitlines(), verify_meta=verify_meta)
+
+
+def write_graph(
+    graph: HypothesisGraph, path: Path | str, *, include_meta: bool = True
+) -> int:
+    """Write a JSONL graph document atomically and return the line count.
+
+    The document is written to a sibling temporary file and renamed into place,
+    so an interrupted run never leaves a half-written artifact behind. The same
+    graph always produces the same bytes, which is what makes checkpointed runs
+    comparable with straight runs.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lines = graph_to_lines(graph, include_meta=include_meta)
+    temporary = target.with_name(f"{target.name}.partial")
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.writelines(lines)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(target)
+    return len(lines)
+
+
+def read_graph(path: Path | str, *, verify_meta: bool = True) -> HypothesisGraph:
+    """Read a JSONL graph document, reporting a missing file as an artifact error."""
+    source = Path(path)
+    if not source.is_file():
+        raise ArtifactError("graph document not found", path=str(source))
+    with source.open("r", encoding="utf-8") as handle:
+        return graph_from_lines(handle, verify_meta=verify_meta)
+
+
+def read_jsonl_records(
+    path: Path | str, *, field: str = "record"
+) -> Iterator[dict[str, Any]]:
+    """Yield decoded objects from any JSONL artifact, skipping blank lines."""
+    source = Path(path)
+    if not source.is_file():
+        raise ArtifactError("artifact not found", path=str(source))
+    with source.open("r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            yield loads_line(line, field=field, line_number=number)
+
+
+def write_jsonl_records(records: Iterable[Mapping[str, Any]], path: Path | str) -> int:
+    """Write mappings as canonical JSONL lines atomically; return the count."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.partial")
+    written = 0
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        for record in records:
+            handle.write(dumps_line(record))
+            written += 1
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(target)
+    return written

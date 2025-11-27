@@ -27,7 +27,8 @@
 | `hypoarena.ids` | 已实现 | 确定性哈希与 ID（`canonical_json`、`stable_hash`、`content_hash`、`hash_parts`、`make_id`、`is_valid_id`） |
 | `hypoarena.codec` | 已实现 | 严格解码与规范 JSONL 行（`require_*`、`reject_unknown_keys`、`check_schema_version`、`dumps_line`、`loads_line`） |
 | `hypoarena.schema` | 已实现 | 记录与枚举（`Claim`、`Evidence`、`Citation`、`Scope`、`Provenance`、`PredictedRelation`、`EvidencePolarity`、`ClaimRelation`） |
-| `hypoarena.serialize` | 已实现 | 记录 ↔ dict/JSONL 编解码（`claim_to_dict`、`claim_from_line`、`evidence_to_line` 等） |
+| `hypoarena.graph` | 已实现 | 假设—证据图（`HypothesisGraph`、`ClaimEdge`、`GraphStats`），见 [graph.md](graph.md) |
+| `hypoarena.serialize` | 已实现 | 记录 ↔ dict/JSONL 编解码（`claim_to_dict`、`graph_to_text`、`graph_from_lines` 等） |
 | `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
 
 记录字段与校验规则详见 [schema.md](schema.md)。后续模块（graph、corpus、

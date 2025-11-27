@@ -53,5 +53,6 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | `hypoarena.codec` | 严格解码与规范 JSONL 行编码 |
 | `hypoarena.schema` | Claim / Evidence / Citation / Scope / Provenance 记录与校验 |
 | `hypoarena.serialize` | 记录与 JSON 载荷之间的编解码层 |
+| `hypoarena.graph` | claim/evidence/link/edge 的存储、遍历、组合与有效性检查 |
 
 模块表随实现推进补充；接口约定见 [api.md](api.md)。

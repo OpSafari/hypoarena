@@ -12,6 +12,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from hypoarena.errors import (
+    CorpusError,
     DuplicateIdError,
     SpanNotFoundError,
     UnknownReferenceError,
@@ -285,6 +286,48 @@ class Corpus:
             for start, end in document.citation_spans(quote):
                 found.append(Citation(document.document_id, start, end, quote))
         return found
+
+    def subcorpus(self, document_ids: Iterable[str]) -> Corpus:
+        """Return a new corpus holding exactly the requested documents."""
+        wanted = set(document_ids)
+        for document_id in wanted:
+            self.document(document_id)
+        return Corpus([self._documents[item] for item in sorted(wanted)])
+
+    def merged(self, other: Corpus, *, on_conflict: str = "error") -> Corpus:
+        """Return the union of two corpora.
+
+        Identical documents (same identifier, same content) are shared. When the
+        same identifier carries different content, ``on_conflict="error"`` raises
+        :class:`~hypoarena.errors.CorpusError` — the default, because silently
+        choosing a side would invalidate citations — while
+        ``on_conflict="prefer_self"`` keeps this corpus's version.
+        """
+        if on_conflict not in ("error", "prefer_self"):
+            raise ValidationError(
+                "unknown conflict policy",
+                on_conflict=on_conflict,
+                allowed=["error", "prefer_self"],
+            )
+        result = Corpus(self.documents)
+        for document in other.documents:
+            if not result.has_document(document.document_id):
+                result.add_document(document)
+                continue
+            if result.document(document.document_id) == document:
+                continue
+            if on_conflict == "error":
+                raise CorpusError(
+                    "conflicting document content during merge",
+                    document_id=document.document_id,
+                )
+        return result
+
+    def documents_for_attribute(self, key: str, value: str) -> tuple[Document, ...]:
+        """Return documents whose metadata carries ``key == value``, sorted."""
+        return tuple(
+            document for document in self.documents if document.attribute(key) == value
+        )
 
 
 @dataclass(frozen=True)

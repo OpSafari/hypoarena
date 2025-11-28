@@ -8,9 +8,12 @@ immutable, so a corpus hash recorded in provenance stays meaningful.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from hypoarena.errors import (
+    DuplicateIdError,
+    UnknownReferenceError,
     ValidationError,
 )
 from hypoarena.ids import (
@@ -126,3 +129,63 @@ class Document:
     def citation_spans(self, quote: str) -> list[tuple[int, int]]:
         """Return every span in which ``quote`` occurs verbatim."""
         return [(start, start + len(quote)) for start in self.find_all(quote)]
+
+
+class Corpus:
+    """An immutable-document collection keyed by identifier.
+
+    Documents cannot be replaced in place: revising text would invalidate every
+    citation that points into it, so updates happen by building a new corpus.
+    Iteration is sorted by identifier for deterministic output.
+    """
+
+    def __init__(self, documents: Iterable[Document] = ()) -> None:
+        self._documents: dict[str, Document] = {}
+        for document in documents:
+            self.add_document(document)
+
+    def add_document(self, document: Document) -> Document:
+        """Insert ``document`` and return it."""
+        if not isinstance(document, Document):
+            raise ValidationError(
+                "corpus entries must be Document objects",
+                got=type(document).__name__,
+            )
+        if document.document_id in self._documents:
+            raise DuplicateIdError(document.document_id, "document")
+        self._documents[document.document_id] = document
+        return document
+
+    def has_document(self, document_id: str) -> bool:
+        """True when the identifier is present."""
+        return document_id in self._documents
+
+    def document(self, document_id: str) -> Document:
+        """Return the document or raise ``UnknownReferenceError``."""
+        try:
+            return self._documents[document_id]
+        except KeyError:
+            raise UnknownReferenceError(document_id, "document") from None
+
+    @property
+    def document_ids(self) -> tuple[str, ...]:
+        """All identifiers in sorted order."""
+        return tuple(sorted(self._documents))
+
+    @property
+    def documents(self) -> tuple[Document, ...]:
+        """All documents ordered by identifier."""
+        return tuple(self._documents[item] for item in self.document_ids)
+
+    def text_of(self, document_id: str) -> str:
+        """Return the full text of one document."""
+        return self.document(document_id).text
+
+    def __len__(self) -> int:
+        return len(self._documents)
+
+    def __contains__(self, document_id: object) -> bool:
+        return isinstance(document_id, str) and document_id in self._documents
+
+    def __iter__(self) -> Iterator[Document]:
+        return iter(self.documents)

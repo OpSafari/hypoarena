@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from hypoarena.errors import (
     DuplicateIdError,
+    SpanNotFoundError,
     UnknownReferenceError,
     ValidationError,
 )
@@ -189,3 +190,57 @@ class Corpus:
 
     def __iter__(self) -> Iterator[Document]:
         return iter(self.documents)
+
+    def resolve(self, citation: Citation) -> str:
+        """Return the exact text a citation points at.
+
+        This is the ground truth used by grounding verification: a citation is
+        only resolvable when the document exists, the offsets are inside it and
+        the characters at those offsets equal the quoted text. A citation that
+        quotes something else — the classic fabricated reference — raises
+        :class:`~hypoarena.errors.SpanNotFoundError` with both strings attached.
+        """
+        document = self.document(citation.document_id)
+        if citation.start < 0 or citation.end > document.length:
+            raise SpanNotFoundError(
+                "citation offsets are outside the document",
+                document_id=citation.document_id,
+                start=citation.start,
+                end=citation.end,
+                length=document.length,
+            )
+        found = document.text[citation.start : citation.end]
+        if found != citation.quote:
+            raise SpanNotFoundError(
+                "citation quote does not match the document text",
+                document_id=citation.document_id,
+                start=citation.start,
+                end=citation.end,
+                quoted=citation.quote,
+                found=found,
+            )
+        return found
+
+    def verify_quote(self, citation: Citation) -> bool:
+        """Non-raising variant of :meth:`resolve` for bulk checks."""
+        try:
+            self.resolve(citation)
+        except (SpanNotFoundError, UnknownReferenceError):
+            return False
+        return True
+
+    def find_quote(self, document_id: str, quote: str) -> tuple[int, int] | None:
+        """Return the first span of ``quote`` in one document, if present."""
+        return self.document(document_id).locate(quote)
+
+    def search_quote(self, quote: str) -> list[Citation]:
+        """Return every citation in the corpus whose text equals ``quote``.
+
+        Results are ordered by document identifier then offset, so the same query
+        always yields the same list.
+        """
+        found: list[Citation] = []
+        for document in self.documents:
+            for start, end in document.citation_spans(quote):
+                found.append(Citation(document.document_id, start, end, quote))
+        return found

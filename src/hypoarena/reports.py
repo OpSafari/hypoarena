@@ -167,3 +167,54 @@ def dedup_table(report: Mapping[str, object]) -> Table | None:
         return None
     rows = [[name, value.get(name, "")] for name in DEDUP_FIELDS]
     return ("Dedup", ["metric", "value"], rows)
+
+
+def beliefs_table(report: Mapping[str, object]) -> Table:
+    """Extract the top-beliefs section."""
+    rows: list[list[object]] = []
+    for entry in _items(report, "beliefs"):
+        if isinstance(entry, Mapping):
+            rows.append([entry.get("claim_id"), entry.get("posterior")])
+    return ("Beliefs", ["claim_id", "posterior"], rows)
+
+
+def evolution_table(report: Mapping[str, object]) -> Table:
+    """Extract the evolution-progress section."""
+    evolution = _sub(report, "evolution")
+    rows = [
+        [name, evolution.get(name, 0)]
+        for name in ("generations", "accepted", "rejected")
+    ]
+    return ("Evolution", ["metric", "value"], rows)
+
+
+def recovery_table(report: Mapping[str, object]) -> Table:
+    """Extract the planted-link recovery summary section."""
+    recovered = _sub(report, "recovered")
+    rows = [[name, recovered.get(name, 0)] for name in ("planted", "recovered", "rate")]
+    return ("Recovery", ["metric", "value"], rows)
+
+
+def recovered_links(report: Mapping[str, object]) -> list[tuple[str, bool]]:
+    """Return each planted link as ``(statement, was_recovered)``.
+
+    This is the per-link detail behind :func:`recovery_table`; the renderer uses
+    it to list exactly which planted links a run did and did not recover.
+    """
+    links = _sub(report, "recovered").get("links")
+    out: list[tuple[str, bool]] = []
+    if isinstance(links, (list, tuple)):
+        for link in links:
+            if isinstance(link, Mapping):
+                out.append(
+                    (str(link.get("statement", "")), bool(link.get("recovered")))
+                )
+    return out
+
+
+def cost_table(report: Mapping[str, object]) -> Table:
+    """Extract the token-accounting section (counts only, never priced)."""
+    cost = _sub(report, "cost")
+    fields = ("calls", "prompt_tokens", "completion_tokens", "total_tokens")
+    rows = [[name, cost.get(name, 0)] for name in fields]
+    return ("Cost (tokens counted, not billed)", ["metric", "value"], rows)

@@ -218,3 +218,51 @@ def cost_table(report: Mapping[str, object]) -> Table:
     fields = ("calls", "prompt_tokens", "completion_tokens", "total_tokens")
     rows = [[name, cost.get(name, 0)] for name in fields]
     return ("Cost (tokens counted, not billed)", ["metric", "value"], rows)
+
+
+# Sections appear in this fixed order in both renderers. A section whose
+# extractor returns None (e.g. dedup when the run skipped it) is omitted rather
+# than shown empty, so the document reflects what the run actually did.
+_TABLES = (
+    counts_table,
+    grounding_table,
+    ranking_table,
+    dedup_table,
+    beliefs_table,
+    evolution_table,
+    recovery_table,
+    cost_table,
+)
+
+
+def render_markdown(report: Mapping[str, object]) -> str:
+    """Render the whole report as a GitHub-flavoured Markdown document.
+
+    The limitations section is always emitted, even when empty, so a rendered
+    report can never silently drop its honesty block.
+    """
+    lines = [f"# Run report: {escape_markdown_cell(report.get('run_id', ''))}", ""]
+    lines.append(f"- config fingerprint: `{report.get('config_fingerprint', '')}`")
+    lines.append(f"- corpus hash: `{report.get('corpus_hash', '')}`")
+    lines.append("")
+    for build in _TABLES:
+        table = build(report)
+        if table is None:
+            continue
+        title, headers, rows = table
+        lines.append(f"## {title}")
+        lines.append("")
+        lines.append(markdown_table(headers, rows))
+        lines.append("")
+    lines.append("## Recovered planted links")
+    lines.append("")
+    for statement, found in recovered_links(report):
+        mark = "recovered" if found else "missing"
+        lines.append(f"- [{mark}] {escape_markdown_cell(statement)}")
+    lines.append("")
+    lines.append("## Limitations")
+    lines.append("")
+    for item in _items(report, "limitations"):
+        lines.append(f"- {escape_markdown_cell(item)}")
+    lines.append("")
+    return "\n".join(lines)

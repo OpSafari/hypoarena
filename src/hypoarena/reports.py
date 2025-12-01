@@ -7,6 +7,7 @@ so a rendered report can never be mistaken for a claim about scientific truth.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Sequence
 
 # A defensive subset of characters that could break a Markdown table cell or
@@ -51,3 +52,29 @@ def markdown_table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> 
             "| " + " | ".join(escape_markdown_cell(cell) for cell in row) + " |"
         )
     return "\n".join(lines)
+
+
+def escape_html(text: object) -> str:
+    """Escape one value for safe inclusion in HTML text or a quoted attribute.
+
+    Uses :func:`html.escape` with ``quote=True`` so both double and single
+    quotes are neutralised; this is the guarantee that keeps untrusted
+    statement text from closing a tag or injecting a script.
+    """
+    return html.escape("" if text is None else str(text), quote=True)
+
+
+def html_table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
+    """Render a self-contained HTML table with every cell escaped.
+
+    The result carries no external references (no scripts, stylesheets or
+    images), so a saved report opens offline exactly as rendered here.
+    """
+    head = "".join(f"<th>{escape_html(header)}</th>" for header in headers)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{escape_html(cell)}</td>" for cell in row) + "</tr>"
+        for row in rows
+    )
+    return (
+        "<table><thead><tr>" + head + "</tr></thead><tbody>" + body + "</tbody></table>"
+    )

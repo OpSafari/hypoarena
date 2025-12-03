@@ -720,3 +720,38 @@ def corpus_from_lines(lines: Iterable[str], *, verify_meta: bool = True) -> Corp
 def corpus_from_text(text: str, *, verify_meta: bool = True) -> Corpus:
     """Rebuild a corpus from a JSONL document string."""
     return corpus_from_lines(text.splitlines(), verify_meta=verify_meta)
+
+
+def write_corpus(corpus: Corpus, path: Path | str, *, include_meta: bool = True) -> int:
+    """Write a corpus document atomically and return the line count."""
+    return write_lines(corpus_to_lines(corpus, include_meta=include_meta), path)
+
+
+def read_corpus(path: Path | str, *, verify_meta: bool = True) -> Corpus:
+    """Read a corpus document, reporting a missing file as an artifact error."""
+    return corpus_from_lines(iter_lines(path), verify_meta=verify_meta)
+
+
+def iter_lines(path: Path | str) -> Iterator[str]:
+    """Yield the lines of a JSONL artifact, raising when it is missing."""
+    source = Path(path)
+    if not source.is_file():
+        raise ArtifactError("artifact not found", path=str(source))
+    with source.open("r", encoding="utf-8") as handle:
+        yield from handle
+
+
+def write_lines(lines: Iterable[str], path: Path | str) -> int:
+    """Write pre-rendered lines atomically; return how many were written."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.partial")
+    written = 0
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        for line in lines:
+            handle.write(line if line.endswith("\n") else line + "\n")
+            written += 1
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(target)
+    return written

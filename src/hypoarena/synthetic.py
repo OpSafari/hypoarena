@@ -112,3 +112,93 @@ def verb_for(rng: Random, relation: PredictedRelation) -> str:
 def canonical_verb(relation: PredictedRelation) -> str:
     """Return the deterministic verb used for canonical statements."""
     return RELATION_VERBS[relation][0]
+
+
+FINDING_TEMPLATES: tuple[str, ...] = (
+    "{subject} {verb} {target} in {system}.",
+    "We observed that {subject} {verb} {target} in {system}.",
+    "Assays in {system} show that {subject} {verb} {target}.",
+    "In {system}, {subject} {verb} {target}.",
+    "Our measurements indicate that {subject} {verb} {target} in {system}.",
+)
+TITLE_TEMPLATES: tuple[str, ...] = (
+    "{subject} {verb} {target}",
+    "On the relation between {subject} and {target}",
+    "Evidence that {subject} {verb} {target} in {system}",
+    "A {system} study of {subject} and {target}",
+)
+FILLER_TEMPLATES: tuple[str, ...] = (
+    "Samples were collected in triplicate and processed in {system}.",
+    "Controls were run in parallel across all batches in {system}.",
+    "Replicates agreed within the accepted tolerance for {system}.",
+    "The full protocol is summarized in the supplementary notes for {system}.",
+    "Batch effects were regressed out before summarizing {system} results.",
+)
+NEGATION_TEMPLATES: tuple[str, ...] = (
+    "We did not observe that {subject} affects {target} in {system}.",
+    "No significant effect of {subject} on {target} was detected in {system}.",
+    "In {system}, {subject} does not appear to change {target}.",
+)
+
+
+def render(template: str, **values: str) -> str:
+    """Fill a template, verifying that every placeholder was supplied."""
+    try:
+        rendered = template.format(**values)
+    except (KeyError, IndexError) as error:
+        raise ValidationError(
+            "template placeholder was not supplied",
+            template=template,
+            missing=str(error),
+            provided=sorted(values),
+        ) from None
+    if "{" in rendered or "}" in rendered:
+        raise ValidationError(
+            "template placeholder was not substituted",
+            template=template,
+            provided=sorted(values),
+        )
+    return rendered
+
+
+def render_finding(
+    rng: Random, subject: str, relation: PredictedRelation, target: str, system: str
+) -> str:
+    """Render one affirmative finding sentence."""
+    return render(
+        rng.choice(FINDING_TEMPLATES),
+        subject=subject,
+        verb=verb_for(rng, relation),
+        target=target,
+        system=system,
+    )
+
+
+def render_title(
+    rng: Random, subject: str, relation: PredictedRelation, target: str, system: str
+) -> str:
+    """Render a paper title for a finding."""
+    return render(
+        rng.choice(TITLE_TEMPLATES),
+        subject=subject,
+        verb=verb_for(rng, relation),
+        target=target,
+        system=system,
+    )
+
+
+def render_filler(rng: Random, system: str) -> str:
+    """Render a methodological sentence that carries no causal claim."""
+    return render(rng.choice(FILLER_TEMPLATES), system=system)
+
+
+def render_negation(rng: Random, subject: str, target: str, system: str) -> str:
+    """Render a sentence contradicting an asserted effect."""
+    return render(
+        rng.choice(NEGATION_TEMPLATES), subject=subject, target=target, system=system
+    )
+
+
+def canonical_statement(subject: str, relation: PredictedRelation, target: str) -> str:
+    """Return the deterministic statement used for planted ground truth."""
+    return f"{subject} {canonical_verb(relation)} {target}"

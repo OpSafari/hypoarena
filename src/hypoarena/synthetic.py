@@ -14,9 +14,13 @@ output.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from random import Random
 
+from hypoarena.corpus import (
+    Document,
+)
 from hypoarena.errors import (
     ValidationError,
 )
@@ -25,6 +29,7 @@ from hypoarena.ids import (
     make_id,
 )
 from hypoarena.schema import (
+    Citation,
     PredictedRelation,
 )
 from hypoarena.text import (
@@ -508,3 +513,137 @@ def contradiction_links(
         )
         for link in sorted(chosen, key=lambda item: (item.subject, item.target))
     )
+
+
+DISTRACTOR_TEMPLATES: tuple[str, ...] = (
+    "Batch {batch} was sequenced more deeply than the rest of the cohort.",
+    "Instrument calibration drifted during week {batch} of the study.",
+    "Sample handling time explains part of the variance in cohort {batch}.",
+    "The repository migrated its identifier scheme in release {batch}.",
+)
+
+
+@dataclass(frozen=True)
+class PlacedFinding:
+    """A rendered sentence, the document carrying it and its exact span."""
+
+    link: PlantedLink
+    document: Document
+    citation: Citation
+    sentence: str
+
+    @property
+    def document_id(self) -> str:
+        """Identifier of the document carrying this finding."""
+        return self.document.document_id
+
+    @property
+    def is_negated(self) -> bool:
+        """True when the sentence denies the planted relation."""
+        return self.link.kind == "contradiction"
+
+
+def join_sentences(
+    items: Sequence[tuple[str, bool]],
+) -> tuple[str, list[tuple[int, int]]]:
+    """Join ``(sentence, is_finding)`` pairs and return text plus finding spans.
+
+    Sentences are separated by single spaces and offsets are collected while the
+    text is assembled, so they stay correct no matter how the caller ordered the
+    items.
+    """
+    parts: list[str] = []
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for sentence, is_finding in items:
+        if is_finding:
+            spans.append((cursor, cursor + len(sentence)))
+        parts.append(sentence)
+        cursor += len(sentence) + 1
+    return " ".join(parts), spans
+
+
+def assemble_document(
+    rng: Random,
+    document_id: str,
+    title: str,
+    findings: Sequence[str],
+    filler: Sequence[str],
+    source: str,
+    attributes: tuple[tuple[str, str], ...] = (),
+) -> tuple[Document, list[tuple[int, int]]]:
+    """Build one document, shuffling sentences while keeping spans exact."""
+    items: list[tuple[str, bool]] = [(sentence, True) for sentence in findings]
+    items.extend((sentence, False) for sentence in filler)
+    rng.shuffle(items)
+    text, spans = join_sentences(items)
+    return Document(document_id, title, text, source, attributes), spans
+
+
+def finding_documents(
+    config: SyntheticConfig,
+    rng: Random,
+    link: PlantedLink,
+    forms: Sequence[str],
+    chain_index: int,
+    link_index: int,
+) -> list[PlacedFinding]:
+    """Create one document per paraphrase, each citing its own exact span."""
+    placed: list[PlacedFinding] = []
+    for paraphrase_index, sentence in enumerate(forms):
+        document_id = make_id(
+            "doc",
+            config.seed,
+            link.kind,
+            chain_index,
+            link_index,
+            paraphrase_index,
+        )
+        title = render_title(rng, link.subject, link.relation, link.target, link.system)
+        filler = [
+            render_filler(rng, link.system) for _ in range(config.filler_sentences)
+        ]
+        document, spans = assemble_document(
+            rng,
+            document_id,
+            title,
+            [sentence],
+            filler,
+            config.source_tag,
+            (("kind", link.kind), ("chain", link.chain_id)),
+        )
+        start, end = spans[0]
+        placed.append(
+            PlacedFinding(
+                link=link,
+                document=document,
+                citation=Citation(document_id, start, end, document.text[start:end]),
+                sentence=sentence,
+            )
+        )
+    return placed
+
+
+def distractor_documents(config: SyntheticConfig, rng: Random) -> tuple[Document, ...]:
+    """Create documents that mention none of the planted variables."""
+    documents: list[Document] = []
+    for index in range(config.distractor_documents):
+        document_id = make_id("doc", config.seed, "distractor", index)
+        batch = str(rng.randrange(1, 20))
+        sentences = [
+            render(rng.choice(DISTRACTOR_TEMPLATES), batch=batch) for _ in range(2)
+        ]
+        sentences.extend(
+            render_filler(rng, rng.choice(MODEL_SYSTEMS))
+            for _ in range(config.filler_sentences)
+        )
+        documents.append(
+            Document(
+                document_id,
+                f"Cohort note {index + 1}",
+                " ".join(sentences),
+                config.source_tag,
+                (("kind", "distractor"),),
+            )
+        )
+    return tuple(documents)

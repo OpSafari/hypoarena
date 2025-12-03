@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from random import Random
 
 from hypoarena.corpus import (
+    Corpus,
     Document,
 )
 from hypoarena.errors import (
@@ -647,3 +648,91 @@ def distractor_documents(config: SyntheticConfig, rng: Random) -> tuple[Document
             )
         )
     return tuple(documents)
+
+
+COMPETING_OFFSET = 1000
+CONTRADICTION_OFFSET = 2000
+
+
+@dataclass(frozen=True)
+class GeneratedCorpus:
+    """Everything one generation produced, kept together for reproducibility."""
+
+    config: SyntheticConfig
+    corpus: Corpus
+    chains: tuple[PlantedChain, ...]
+    competing: tuple[PlantedLink, ...]
+    contradictions: tuple[PlantedLink, ...]
+    findings: tuple[PlacedFinding, ...]
+    distractor_ids: tuple[str, ...]
+
+    def findings_for(self, link: PlantedLink) -> tuple[PlacedFinding, ...]:
+        """Return the placed findings that render one link."""
+        return tuple(
+            finding
+            for finding in self.findings
+            if finding.link.key() == link.key() and finding.link.kind == link.kind
+        )
+
+
+def generate(config: SyntheticConfig) -> GeneratedCorpus:
+    """Generate a corpus with planted chains, rivals, negations and distractors.
+
+    A single seeded generator drives every draw, in a fixed order, so the same
+    configuration always yields byte-identical documents. The document count
+    equals :meth:`SyntheticConfig.expected_documents`.
+    """
+    rng = config.rng()
+    chains = plant_chains(config, rng)
+    findings: list[PlacedFinding] = []
+    documents: list[Document] = []
+    competing: list[PlantedLink] = []
+    contradictions: list[PlantedLink] = []
+
+    def place(
+        link: PlantedLink, forms: Sequence[str], chain_index: int, slot: int
+    ) -> None:
+        placed = finding_documents(config, rng, link, forms, chain_index, slot)
+        findings.extend(placed)
+        documents.extend(finding.document for finding in placed)
+
+    for chain_index, chain in enumerate(chains):
+        for link_index, link in enumerate(chain.links):
+            forms = paraphrase_cluster(rng, link, config.paraphrases_per_link)
+            place(link, forms, chain_index, link_index)
+        rivals = competing_links(chain, rng, config.competitors_per_chain)
+        competing.extend(rivals)
+        for rival_index, rival in enumerate(rivals):
+            place(
+                rival,
+                paraphrase_cluster(rng, rival, 1),
+                chain_index,
+                COMPETING_OFFSET + rival_index,
+            )
+        negations = contradiction_links(chain, rng, config.contradictions_per_chain)
+        contradictions.extend(negations)
+        for negation_index, negation in enumerate(negations):
+            sentence = render_negation(
+                rng, negation.subject, negation.target, negation.system
+            )
+            place(
+                negation, [sentence], chain_index, CONTRADICTION_OFFSET + negation_index
+            )
+
+    distractors = distractor_documents(config, rng)
+    documents.extend(distractors)
+    return GeneratedCorpus(
+        config=config,
+        corpus=Corpus(documents),
+        chains=chains,
+        competing=tuple(competing),
+        contradictions=tuple(contradictions),
+        findings=tuple(findings),
+        distractor_ids=tuple(document.document_id for document in distractors),
+    )
+
+
+def build_corpus(seed: int = 270106, **overrides: object) -> Corpus:
+    """Convenience wrapper returning just the corpus for a seed."""
+    config = SyntheticConfig(seed=seed, **overrides)  # type: ignore[arg-type]
+    return generate(config).corpus

@@ -22,9 +22,13 @@ from hypoarena.errors import (
 )
 from hypoarena.ids import (
     content_hash,
+    make_id,
 )
 from hypoarena.schema import (
     PredictedRelation,
+)
+from hypoarena.text import (
+    normalize,
 )
 
 ENTITY_POOLS: dict[str, tuple[str, ...]] = {
@@ -281,3 +285,136 @@ class SyntheticConfig:
     def fingerprint(self) -> str:
         """Return a digest of the configuration for run metadata."""
         return content_hash(asdict(self))
+
+
+LINK_KINDS = ("planted", "competing", "contradiction")
+
+
+@dataclass(frozen=True)
+class PlantedLink:
+    """One planted relation between two variables.
+
+    ``kind`` records the role the link plays in the ground truth: ``planted``
+    links are the ones a discovery run should recover, ``competing`` links are
+    plausible alternatives about the same variable pair, and ``contradiction``
+    links are negated surface forms of a planted link.
+    """
+
+    chain_id: str
+    subject: str
+    target: str
+    relation: PredictedRelation
+    system: str
+    kind: str = "planted"
+
+    def __post_init__(self) -> None:
+        if self.kind not in LINK_KINDS:
+            raise ValidationError(
+                "unknown link kind", kind=self.kind, allowed=list(LINK_KINDS)
+            )
+        if not self.subject.strip() or not self.target.strip():
+            raise ValidationError("planted link variables must not be blank")
+        if normalize(self.subject) == normalize(self.target):
+            raise ValidationError(
+                "planted link variables must differ",
+                subject=self.subject,
+                target=self.target,
+            )
+
+    @property
+    def statement(self) -> str:
+        """The canonical statement of this link."""
+        return canonical_statement(self.subject, self.relation, self.target)
+
+    def key(self) -> tuple[str, str, str]:
+        """Normalized identity used to match recovered claims against truth."""
+        return (
+            normalize(self.subject),
+            self.relation.value,
+            normalize(self.target),
+        )
+
+    @property
+    def is_true(self) -> bool:
+        """True for links that the ground truth considers correct."""
+        return self.kind == "planted"
+
+
+@dataclass(frozen=True)
+class PlantedChain:
+    """A chain of variables plus the links that connect consecutive pairs."""
+
+    chain_id: str
+    variables: tuple[str, ...]
+    system: str
+    links: tuple[PlantedLink, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.variables) < MIN_CHAIN_LENGTH:
+            raise ValidationError(
+                "a chain needs at least two variables", count=len(self.variables)
+            )
+        if len(set(self.variables)) != len(self.variables):
+            raise ValidationError(
+                "chain variables must be distinct", variables=self.variables
+            )
+        if len(self.links) != len(self.variables) - 1:
+            raise ValidationError(
+                "chain must have one link per variable pair",
+                variables=len(self.variables),
+                links=len(self.links),
+            )
+
+    def link_between(self, subject: str, target: str) -> PlantedLink | None:
+        """Return the link connecting two variables, if any."""
+        for link in self.links:
+            if link.subject == subject and link.target == target:
+                return link
+        return None
+
+
+def draw_variables(rng: Random, count: int) -> tuple[str, ...]:
+    """Draw ``count`` distinct variables, ending on a phenotype."""
+    variables: list[str] = []
+    pools = [*SUBJECT_POOLS, *OBJECT_POOLS]
+    attempts = 0
+    while len(variables) < count and attempts < count * 20:
+        attempts += 1
+        pool = pools[attempts % len(pools)]
+        candidate = draw_entity(rng, pool)
+        if candidate not in variables:
+            variables.append(candidate)
+    if len(variables) < count:
+        raise ValidationError(
+            "vocabulary is too small for the requested chain length", count=count
+        )
+    phenotype = draw_entity(rng, "phenotype")
+    while phenotype in variables:
+        phenotype = draw_entity(rng, "phenotype")
+    variables[-1] = phenotype
+    return tuple(variables)
+
+
+def plant_chains(config: SyntheticConfig, rng: Random) -> tuple[PlantedChain, ...]:
+    """Plant ``config.chains`` causal chains with randomly chosen directions."""
+    chains: list[PlantedChain] = []
+    for index in range(config.chains):
+        chain_id = make_id("chn", config.seed, "chain", index)
+        system = rng.choice(MODEL_SYSTEMS)
+        variables = draw_variables(rng, config.chain_length)
+        links = tuple(
+            PlantedLink(
+                chain_id=chain_id,
+                subject=variables[position],
+                target=variables[position + 1],
+                relation=rng.choice(CAUSAL_RELATIONS),
+                system=system,
+            )
+            for position in range(len(variables) - 1)
+        )
+        chains.append(
+            PlantedChain(
+                chain_id=chain_id, variables=variables, system=system, links=links
+            )
+        )
+    return tuple(chains)

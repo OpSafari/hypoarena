@@ -8,8 +8,10 @@ immutable, so a corpus hash recorded in provenance stays meaningful.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from random import Random
 
 from hypoarena.errors import (
     CorpusError,
@@ -351,3 +353,83 @@ class CorpusStats:
             "mean_length": self.mean_length,
             "sources": dict(self.sources),
         }
+
+
+WORD_SPAN_PATTERN = re.compile(r"\S+")
+DEFAULT_MIN_SPAN_LENGTH = 12
+DEFAULT_MAX_SPAN_LENGTH = 80
+
+
+def word_spans(document: Document) -> list[tuple[int, int]]:
+    """Return the ``(start, end)`` offsets of every whitespace-delimited token."""
+    return [
+        (match.start(), match.end())
+        for match in WORD_SPAN_PATTERN.finditer(document.text)
+    ]
+
+
+def sample_spans(
+    document: Document,
+    rng: Random,
+    count: int,
+    *,
+    min_length: int = DEFAULT_MIN_SPAN_LENGTH,
+    max_length: int = DEFAULT_MAX_SPAN_LENGTH,
+) -> list[Citation]:
+    """Sample up to ``count`` non-overlapping citations from one document.
+
+    Spans start and end on word boundaries so quotes never cut a token in half,
+    and they are returned sorted by offset. All randomness comes from ``rng``, so
+    a fixed seed always reproduces the same spans — the property the synthetic
+    literature factory and every grounded test depend on.
+
+    Documents that are too short to satisfy ``min_length`` yield a single span
+    covering the whole text (or nothing at all when even that is shorter than the
+    minimum), which keeps callers free of special cases.
+    """
+    if count < 0:
+        raise ValidationError("span count must be >= 0", count=count)
+    if min_length < 1:
+        raise ValidationError("minimum span length must be >= 1", min_length=min_length)
+    if max_length < min_length:
+        raise ValidationError(
+            "maximum span length must be >= minimum",
+            min_length=min_length,
+            max_length=max_length,
+        )
+    spans = word_spans(document)
+    if not spans:
+        return []
+    if document.length < min_length:
+        return (
+            [Citation(document.document_id, 0, document.length, document.text)]
+            if document.length >= min_length
+            else []
+        )
+    chosen: list[tuple[int, int]] = []
+    attempts = 0
+    limit = max(20, count * 20)
+    while len(chosen) < count and attempts < limit:
+        attempts += 1
+        start_index = rng.randrange(len(spans))
+        start = spans[start_index][0]
+        end = start
+        for index in range(start_index, len(spans)):
+            candidate = spans[index][1]
+            if candidate - start > max_length:
+                break
+            end = candidate
+            if end - start >= min_length:
+                break
+        if end - start < min_length:
+            continue
+        if any(
+            start < existing_end and existing_start < end
+            for existing_start, existing_end in chosen
+        ):
+            continue
+        chosen.append((start, end))
+    return [
+        Citation(document.document_id, start, end, document.text[start:end])
+        for start, end in sorted(chosen)
+    ]

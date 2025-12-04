@@ -32,6 +32,8 @@ from hypoarena.ids import (
 from hypoarena.schema import (
     Citation,
     Claim,
+    Evidence,
+    EvidencePolarity,
     PredictedRelation,
     Provenance,
     Scope,
@@ -863,3 +865,50 @@ def gold_claims(generated: GeneratedCorpus, *, corpus_hash: str) -> tuple[Claim,
             )
         )
     return tuple(claims)
+
+
+SUPPORT_STRENGTHS: tuple[float, ...] = (0.7, 0.75, 0.8, 0.85, 0.9)
+CONTRADICTION_STRENGTH = 0.6
+
+
+def gold_evidence(
+    generated: GeneratedCorpus, *, corpus_hash: str
+) -> tuple[Evidence, ...]:
+    """Build one evidence item per placed finding, in generation order.
+
+    Strengths come from a fixed schedule rather than from the generator's random
+    stream, so belief-accumulation tests can predict the posterior exactly.
+    Negated findings become refuting evidence with a single fixed strength.
+    """
+    config = generated.config
+    items: list[Evidence] = []
+    for index, finding in enumerate(generated.findings):
+        negated = finding.is_negated
+        items.append(
+            Evidence(
+                evidence_id=make_id(
+                    "evd",
+                    finding.document_id,
+                    finding.citation.start,
+                    finding.citation.end,
+                ),
+                statement=finding.sentence,
+                polarity=(
+                    EvidencePolarity.REFUTE if negated else EvidencePolarity.SUPPORT
+                ),
+                strength=(
+                    CONTRADICTION_STRENGTH
+                    if negated
+                    else SUPPORT_STRENGTHS[index % len(SUPPORT_STRENGTHS)]
+                ),
+                citations=(finding.citation,),
+                method="synthetic_finding",
+                provenance=Provenance(
+                    origin="synthetic",
+                    seed=config.seed,
+                    corpus_hash=corpus_hash,
+                    notes=finding.link.kind,
+                ),
+            )
+        )
+    return tuple(items)

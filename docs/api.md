@@ -45,7 +45,8 @@
 | `hypoarena.cost` | 已实现 | token 记账（`CostLedger`、`CostEntry`），只计数不计费，见 [runner.md](runner.md) |
 | `hypoarena.stages` | 已实现 | 阶段与运行摘要记录（`StageResult`、`RunSummary`），见 [runner.md](runner.md) |
 | `hypoarena.runner` | 已实现 | 流水线编排、断点续跑与报告（`Pipeline`、`run_report`、`REPORT_LIMITATIONS`），见 [runner.md](runner.md) |
+| `hypoarena.reports` | 已实现 | 报告渲染为 Markdown 与自包含 HTML（`render_markdown`、`render_html`、`write_reports`），hostile text 转义、内嵌 limitations，见 [reports.md](reports.md) |
 
 记录字段与校验规则详见 [schema.md](schema.md)。编排层（config、artifacts、
-cost、stages、runner）见 [runner.md](runner.md)。后续模块（reports、ranker）
-落地后会补充到本表。
+cost、stages、runner）见 [runner.md](runner.md)，报告渲染见 [reports.md](reports.md)。
+后续模块（ranker）落地后会补充到本表。

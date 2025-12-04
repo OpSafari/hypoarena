@@ -31,7 +31,10 @@ from hypoarena.ids import (
 )
 from hypoarena.schema import (
     Citation,
+    Claim,
     PredictedRelation,
+    Provenance,
+    Scope,
 )
 from hypoarena.text import (
     content_tokens,
@@ -822,3 +825,41 @@ def truth_of(generated: GeneratedCorpus) -> PlantedTruth:
         clusters=clusters,
         distractor_ids=generated.distractor_ids,
     )
+
+
+def gold_claims(generated: GeneratedCorpus, *, corpus_hash: str) -> tuple[Claim, ...]:
+    """Build the gold claim set: one claim per planted link and per rival.
+
+    Contradiction findings deliberately get no claim of their own — they become
+    refuting evidence against the planted claim they deny. Every claim carries
+    the exact citations of the sentences that state it, so a grounding verifier
+    run over this set has a known-correct answer.
+    """
+    links = [link for chain in generated.chains for link in chain.links]
+    links.extend(generated.competing)
+    config = generated.config
+    claims: list[Claim] = []
+    for link in links:
+        claims.append(
+            Claim(
+                claim_id=make_id(
+                    "clm", config.seed, link.chain_id, link.key(), link.kind
+                ),
+                statement=link.statement,
+                subject=link.subject,
+                object=link.target,
+                relation=link.relation,
+                scope=Scope(population=link.system),
+                citations=tuple(
+                    finding.citation for finding in generated.findings_for(link)
+                ),
+                mechanism=None,
+                provenance=Provenance(
+                    origin="synthetic",
+                    seed=config.seed,
+                    corpus_hash=corpus_hash,
+                    notes=link.kind,
+                ),
+            )
+        )
+    return tuple(claims)

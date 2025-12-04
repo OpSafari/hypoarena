@@ -38,8 +38,11 @@ from hypoarena.serialize import (
     loads_line,
     write_lines,
 )
+from hypoarena.serialize import (
+    write_text as write_text_atomic,
+)
 
-ARTIFACT_PATTERN = re.compile(r"[A-Za-z0-9_.-]+\.(?:jsonl|json)")
+ARTIFACT_PATTERN = re.compile(r"[A-Za-z0-9_.-]+\.(?:jsonl|json|md|html)")
 METADATA_ARTIFACT = "run.json"
 METADATA_KEYS = (
     "run_id",
@@ -57,7 +60,8 @@ def check_artifact_name(name: str) -> str:
     """Validate an artifact file name and return it."""
     if not ARTIFACT_PATTERN.fullmatch(name):
         raise ValidationError(
-            "artifact names must be flat file names ending in .jsonl or .json",
+            "artifact names must be flat file names ending in "
+            ".jsonl, .json, .md or .html",
             name=name,
         )
     return name
@@ -126,6 +130,20 @@ class ArtifactStore:
                 "json artifact must hold exactly one line", name=name, count=len(lines)
             )
         return loads_line(lines[0], field=name)
+
+    def write_text(self, name: str, text: str) -> Path:
+        """Write a raw text artifact atomically (e.g. a rendered report)."""
+        target = self.path(name)
+        write_text_atomic(text, target)
+        return target
+
+    def read_text(self, name: str) -> str:
+        """Read a raw text artifact, raising when it is missing."""
+        if not self.exists(name):
+            raise ArtifactError(
+                "artifact not found", name=name, path=str(self.path(name))
+            )
+        return self.path(name).read_text(encoding="utf-8")
 
     def write_metadata(self, metadata: RunMetadata) -> Path:
         """Write the run metadata document."""

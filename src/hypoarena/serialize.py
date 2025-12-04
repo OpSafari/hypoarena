@@ -2826,3 +2826,22 @@ def run_summary_from_dict(payload: object, *, field: str = "summary") -> RunSumm
             )
         ),
     )
+
+
+def write_text(text: str, path: Path | str) -> int:
+    """Write one text blob atomically; return the number of bytes written.
+
+    Mirrors :func:`write_lines` (temporary file, fsync, atomic replace) but keeps
+    the text verbatim instead of framing it into newline-terminated records, so
+    it is the right primitive for rendered Markdown/HTML artifacts.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.partial")
+    data = text.encode("utf-8")
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(target)
+    return len(data)

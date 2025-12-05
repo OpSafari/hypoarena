@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -112,3 +113,16 @@ def train_ranker(
         optimizer.step()
         losses.append(float(loss.item()))
     return TrainResult(model=model, losses=tuple(losses), epochs=epochs, seed=seed)
+
+
+def predict_scores(model: RubricRanker, features: np.ndarray) -> np.ndarray:
+    """Return predicted scores in ``[0, 1]`` for a NumPy feature matrix.
+
+    Runs in eval mode under ``no_grad`` so inference is cheap and free of any
+    autograd bookkeeping; the result is a flat 1-D array aligned with the rows.
+    """
+    model.eval()
+    with torch.no_grad():
+        tensor = torch.tensor(np.asarray(features, dtype=np.float32))
+        predicted = model(tensor).detach().cpu().numpy().ravel()
+    return predicted

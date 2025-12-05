@@ -226,3 +226,113 @@ class RankerFeaturizer:
     def transform(self, examples: Sequence[LabeledExample]) -> np.ndarray:
         """Project new examples into the fitted feature space."""
         return self.vectorizer.transform([example.text for example in examples])
+
+
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    """Return 1-based ranks with ties sharing their average rank."""
+    order = np.argsort(values, kind="mergesort")
+    ordered = values[order]
+    ranks = np.arange(1, len(values) + 1, dtype=np.float64)
+    index = 0
+    while index < len(values):
+        end = index
+        while end + 1 < len(values) and ordered[end + 1] == ordered[index]:
+            end += 1
+        if end > index:
+            ranks[index : end + 1] = ranks[index : end + 1].mean()
+        index = end + 1
+    out = np.empty(len(values), dtype=np.float64)
+    out[order] = ranks
+    return out
+
+
+def spearman_correlation(left: Sequence[float], right: Sequence[float]) -> float:
+    """Return the rank correlation of two equal-length score sequences.
+
+    Ties use average ranks. A constant input has no defined ordering, so the
+    correlation is reported as ``0.0`` rather than ``nan`` - an honest "no
+    monotonic agreement" instead of a value that would poison an average.
+    """
+    a = np.asarray(left, dtype=np.float64)
+    b = np.asarray(right, dtype=np.float64)
+    if a.shape != b.shape:
+        raise ValidationError(
+            "spearman needs equal-length sequences", left=a.shape, right=b.shape
+        )
+    if a.size < 2:
+        raise ValidationError("spearman needs at least two values", size=int(a.size))
+    ranks_a = _average_ranks(a)
+    ranks_b = _average_ranks(b)
+    if float(np.std(ranks_a)) == 0.0 or float(np.std(ranks_b)) == 0.0:
+        return 0.0
+    return float(np.corrcoef(ranks_a, ranks_b)[0, 1])
+
+
+@dataclass(frozen=True)
+class CalibrationBin:
+    """One equal-width bin of a reliability curve over ``[0, 1]``."""
+
+    index: int
+    low: float
+    high: float
+    count: int
+    mean_predicted: float
+    mean_actual: float
+
+    def __post_init__(self) -> None:
+        if self.count < 0:
+            raise ValidationError("count must be >= 0", count=self.count)
+        if not 0.0 <= self.low <= self.high <= 1.0:
+            raise ValidationError(
+                "bin edges must satisfy 0 <= low <= high <= 1",
+                low=self.low,
+                high=self.high,
+            )
+
+
+def calibration_curve(
+    predicted: Sequence[float],
+    actual: Sequence[float],
+    *,
+    bins: int = 10,
+) -> tuple[CalibrationBin, ...]:
+    """Bin predictions by predicted score and compare to the actual labels.
+
+    A perfectly calibrated ranker puts ``mean_predicted == mean_actual`` in every
+    occupied bin. Empty bins are reported with count 0 so the curve always has
+    exactly ``bins`` entries and cannot hide gaps by dropping them.
+    """
+    preds = np.asarray(predicted, dtype=np.float64)
+    acts = np.asarray(actual, dtype=np.float64)
+    if preds.shape != acts.shape:
+        raise ValidationError(
+            "calibration needs equal-length sequences",
+            predicted=preds.shape,
+            actual=acts.shape,
+        )
+    if bins < 1:
+        raise ValidationError("bins must be >= 1", bins=bins)
+    if preds.size and (preds.min() < 0.0 or preds.max() > 1.0):
+        raise ValidationError("predicted scores must lie within [0, 1]")
+    if acts.size and (acts.min() < 0.0 or acts.max() > 1.0):
+        raise ValidationError("actual scores must lie within [0, 1]")
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    curve: list[CalibrationBin] = []
+    for index in range(bins):
+        low, high = float(edges[index]), float(edges[index + 1])
+        if index == bins - 1:
+            mask = (preds >= low) & (preds <= high)
+        else:
+            mask = (preds >= low) & (preds < high)
+        count = int(mask.sum())
+        curve.append(
+            CalibrationBin(
+                index=index,
+                low=low,
+                high=high,
+                count=count,
+                mean_predicted=float(preds[mask].mean()) if count else 0.0,
+                mean_actual=float(acts[mask].mean()) if count else 0.0,
+            )
+        )
+    return tuple(curve)

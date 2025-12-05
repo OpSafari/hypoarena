@@ -18,6 +18,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from random import Random
 
+import numpy as np
+
+from hypoarena.dedup import TfidfVectorizer
 from hypoarena.errors import ValidationError
 
 try:  # pragma: no cover - the import path depends on the installed extras
@@ -156,3 +159,70 @@ def synthetic_ranking_dataset(
             )
         )
     return tuple(examples)
+
+
+@dataclass(frozen=True)
+class RankerData:
+    """A feature matrix and label vector ready for training or inference.
+
+    ``features`` holds one L2-normalized TF-IDF row per example and ``scores``
+    the matching planted label in ``[0, 1]``. Shapes are validated so a mismatch
+    between the matrix and the labels cannot reach the (torch) trainer.
+    """
+
+    features: np.ndarray
+    scores: np.ndarray
+    vocabulary: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.features.ndim != 2:
+            raise ValidationError(
+                "features must be a 2-D matrix", ndim=int(self.features.ndim)
+            )
+        if self.scores.ndim != 1:
+            raise ValidationError(
+                "scores must be a 1-D vector", ndim=int(self.scores.ndim)
+            )
+        if self.features.shape[0] != self.scores.shape[0]:
+            raise ValidationError(
+                "features and scores disagree on the number of rows",
+                features=int(self.features.shape[0]),
+                scores=int(self.scores.shape[0]),
+            )
+        if len(self.vocabulary) != self.features.shape[1]:
+            raise ValidationError(
+                "vocabulary size disagrees with the feature width",
+                vocabulary=len(self.vocabulary),
+                width=int(self.features.shape[1]),
+            )
+
+    def __len__(self) -> int:
+        return int(self.features.shape[0])
+
+
+class RankerFeaturizer:
+    """Turns labeled examples into TF-IDF features and a score vector.
+
+    A thin, torch-free wrapper over :class:`hypoarena.dedup.TfidfVectorizer` so
+    the feature layer can be tested (and reused) without the optional extra.
+    """
+
+    def __init__(self, ngram_size: int = 1, min_document_frequency: int = 1) -> None:
+        self.vectorizer = TfidfVectorizer(
+            ngram_size=ngram_size, min_document_frequency=min_document_frequency
+        )
+
+    def fit_transform(self, examples: Sequence[LabeledExample]) -> RankerData:
+        """Learn the vocabulary on ``examples`` and return their features."""
+        if not examples:
+            raise ValidationError("cannot featurize an empty dataset")
+        texts = [example.text for example in examples]
+        features = self.vectorizer.fit_transform(texts)
+        scores = np.array([example.score for example in examples], dtype=np.float64)
+        return RankerData(
+            features=features, scores=scores, vocabulary=self.vectorizer.vocabulary_
+        )
+
+    def transform(self, examples: Sequence[LabeledExample]) -> np.ndarray:
+        """Project new examples into the fitted feature space."""
+        return self.vectorizer.transform([example.text for example in examples])

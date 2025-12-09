@@ -1016,34 +1016,28 @@ class SyntheticBundle:
         joined to its planted counterpart with a ``contradicts`` edge.
         """
         result = HypothesisGraph()
-        claim_by_key: dict[tuple[str, str, str], str] = {}
+        known_claims = {claim.claim_id for claim in self.claims}
         planted_by_pair: dict[tuple[str, str], str] = {}
         for claim in self.claims:
             result.add_claim(claim)
-            key = (
-                normalize(claim.subject),
-                claim.relation.value,
-                normalize(claim.object),
-            )
-            claim_by_key[key] = claim.claim_id
             if claim.provenance.notes == "planted":
-                planted_by_pair[(key[0], key[2])] = claim.claim_id
+                pair = (normalize(claim.subject), normalize(claim.object))
+                planted_by_pair.setdefault(pair, claim.claim_id)
         for item, finding in zip(self.evidence, self.findings, strict=True):
             result.add_evidence(item)
-            claim_id = claim_by_key.get(finding.link.key())
-            if claim_id is not None:
-                result.link_evidence(claim_id, item.evidence_id)
+            if finding.claim_id in known_claims:
+                result.link_evidence(finding.claim_id, item.evidence_id)
         for rival in self.truth.competing:
+            rival_id = claim_id_for(self.config, rival)
             pair = (normalize(rival.subject), normalize(rival.target))
             planted_id = planted_by_pair.get(pair)
-            rival_id = claim_by_key.get(rival.key())
-            if planted_id is not None and rival_id is not None:
-                result.add_edge(
-                    planted_id,
-                    rival_id,
-                    ClaimRelation.CONTRADICTS,
-                    note="planted rival",
-                )
+            if planted_id is None or rival_id not in known_claims:
+                continue
+            if result.has_edge(planted_id, rival_id, ClaimRelation.CONTRADICTS):
+                continue
+            result.add_edge(
+                planted_id, rival_id, ClaimRelation.CONTRADICTS, note="planted rival"
+            )
         result.validate()
         return result
 

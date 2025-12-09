@@ -567,6 +567,7 @@ class PlacedFinding:
     document: Document
     citation: Citation
     sentence: str
+    claim_id: str
 
     @property
     def document_id(self) -> str:
@@ -655,6 +656,7 @@ def finding_documents(
                 document=document,
                 citation=Citation(document_id, start, end, document.text[start:end]),
                 sentence=sentence,
+                claim_id=claim_id_for(config, link),
             )
         )
     return placed
@@ -863,6 +865,20 @@ def truth_of(generated: GeneratedCorpus) -> PlantedTruth:
     )
 
 
+def claim_id_for(
+    config: SyntheticConfig, link: PlantedLink, *, kind: str | None = None
+) -> str:
+    """Return the deterministic claim identifier for one planted link.
+
+    Negated findings do not get a claim of their own: they are evidence against
+    the planted claim, so their identifier resolves to that claim instead.
+    """
+    role = link.kind if kind is None else kind
+    if role == "contradiction":
+        role = "planted"
+    return make_id("clm", config.seed, link.chain_id, link.key(), role)
+
+
 def gold_claims(generated: GeneratedCorpus, *, corpus_hash: str) -> tuple[Claim, ...]:
     """Build the gold claim set: one claim per planted link and per rival.
 
@@ -878,9 +894,7 @@ def gold_claims(generated: GeneratedCorpus, *, corpus_hash: str) -> tuple[Claim,
     for link in links:
         claims.append(
             Claim(
-                claim_id=make_id(
-                    "clm", config.seed, link.chain_id, link.key(), link.kind
-                ),
+                claim_id=claim_id_for(config, link),
                 statement=link.statement,
                 subject=link.subject,
                 object=link.target,

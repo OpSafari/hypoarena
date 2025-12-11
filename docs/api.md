@@ -30,6 +30,7 @@
 | `hypoarena.graph` | 已实现 | 假设—证据图（`HypothesisGraph`、`ClaimEdge`、`GraphStats`），见 [graph.md](graph.md) |
 | `hypoarena.serialize` | 已实现 | 记录 ↔ dict/JSONL 编解码（`claim_to_dict`、`graph_to_text`、`graph_from_lines` 等） |
 | `hypoarena.corpus` | 已实现 | 文档与语料容器、span 解析与采样（`Document`、`Corpus`、`CorpusStats`、`sample_spans`），见 [corpus.md](corpus.md) |
+| `hypoarena.synthetic` | 已实现 | 植入真值的合成文献工厂（`SyntheticConfig`、`generate`、`build_bundle`、`SyntheticBundle`、`PlantedTruth`），见 [synthetic.md](synthetic.md) |
 | `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
 
 记录字段与校验规则详见 [schema.md](schema.md)。后续模块（graph、corpus、

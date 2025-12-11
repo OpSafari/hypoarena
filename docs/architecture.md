@@ -55,5 +55,6 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | `hypoarena.serialize` | 记录与 JSON 载荷之间的编解码层 |
 | `hypoarena.graph` | claim/evidence/link/edge 的存储、遍历、组合与有效性检查 |
 | `hypoarena.corpus` | 文档与语料容器，citation 的真值解析 |
+| `hypoarena.synthetic` | 植入因果链/竞争假设/改写簇的合成语料与 gold 记录 |
 
 模块表随实现推进补充；接口约定见 [api.md](api.md)。

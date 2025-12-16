@@ -10,7 +10,17 @@ explicit instead of hiding it behind a boolean.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum, unique
+
+from hypoarena.schema import (
+    Citation,
+    Claim,
+)
+from hypoarena.text import (
+    content_tokens,
+    jaccard,
+)
 
 
 @unique
@@ -64,3 +74,44 @@ def is_fabricating(issue: GroundingIssue) -> bool:
 def is_soft(issue: GroundingIssue) -> bool:
     """True when an issue downgrades a citation without invalidating it."""
     return issue in SOFT_ISSUES
+
+
+@dataclass(frozen=True)
+class CitationCheck:
+    """The outcome of checking one citation of one claim."""
+
+    citation: Citation
+    resolved: bool
+    issues: tuple[GroundingIssue, ...]
+    entity_overlap: float
+    claimed_numbers: tuple[float, ...]
+    quoted_numbers: tuple[float, ...]
+    detail: str | None = None
+
+    @property
+    def is_fabricated(self) -> bool:
+        """True when the cited text is not where the citation says it is."""
+        return any(is_fabricating(issue) for issue in self.issues)
+
+    @property
+    def is_clean(self) -> bool:
+        """True when no issue at all was raised."""
+        return not self.issues
+
+    def span(self) -> tuple[str, int, int]:
+        """Return the citation's document and offsets as a plain tuple."""
+        return (self.citation.document_id, self.citation.start, self.citation.end)
+
+
+def claim_terms(claim: Claim) -> set[str]:
+    """Return the content tokens a claim asserts, from its variables."""
+    return set(content_tokens(f"{claim.subject} {claim.object}"))
+
+
+def entity_overlap(claim: Claim, quote: str) -> float:
+    """Return the Jaccard overlap between a claim's variables and a quote.
+
+    Only the claim's subject and object contribute: the statement itself usually
+    repeats them plus a verb, and including it would reward verbose claims.
+    """
+    return jaccard(claim_terms(claim), set(content_tokens(quote)))

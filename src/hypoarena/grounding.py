@@ -20,6 +20,9 @@ from hypoarena.corpus import (
 from hypoarena.errors import (
     ValidationError,
 )
+from hypoarena.graph import (
+    HypothesisGraph,
+)
 from hypoarena.ids import (
     content_hash,
 )
@@ -324,6 +327,14 @@ class GroundingVerifier:
             issues=issues,
         )
 
+    def verify_claims(self, claims: Iterable[Claim]) -> tuple[GroundingReport, ...]:
+        """Verify many claims, preserving the input order."""
+        return tuple(self.verify(claim) for claim in claims)
+
+    def verify_graph(self, graph: HypothesisGraph) -> tuple[GroundingReport, ...]:
+        """Verify every claim in a graph, in identifier order."""
+        return self.verify_claims(graph.claims)
+
 
 ISSUE_SEVERITY: tuple[GroundingIssue, ...] = (
     GroundingIssue.NO_CITATIONS,
@@ -389,3 +400,54 @@ class GroundingReport:
             "citations": len(self.checks),
             "resolved": sum(1 for check in self.checks if check.resolved),
         }
+
+
+@dataclass(frozen=True)
+class GroundingSummary:
+    """Aggregate outcome of a verification pass."""
+
+    total: int
+    grounded: int
+    weakly_grounded: int
+    ungrounded: int
+    fabricated: int
+    grounded_rate: float
+    mean_score: float
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view for reports and CLI output."""
+        return {
+            "total": self.total,
+            "grounded": self.grounded,
+            "weakly_grounded": self.weakly_grounded,
+            "ungrounded": self.ungrounded,
+            "fabricated": self.fabricated,
+            "grounded_rate": self.grounded_rate,
+            "mean_score": self.mean_score,
+        }
+
+
+def summarize_reports(reports: Iterable[GroundingReport]) -> GroundingSummary:
+    """Aggregate per-claim reports into counts, a grounded rate and a mean score.
+
+    Rates are defined over all reports, including ungrounded ones, so a run that
+    silently drops uncited claims cannot look better than it is.
+    """
+    materialized = list(reports)
+    counts = {flag: 0 for flag in GroundingFlag}
+    for report in materialized:
+        counts[report.flag] += 1
+    total = len(materialized)
+    return GroundingSummary(
+        total=total,
+        grounded=counts[GroundingFlag.GROUNDED],
+        weakly_grounded=counts[GroundingFlag.WEAK],
+        ungrounded=counts[GroundingFlag.UNGROUNDED],
+        fabricated=counts[GroundingFlag.FABRICATED],
+        grounded_rate=round(counts[GroundingFlag.GROUNDED] / total, 4)
+        if total
+        else 0.0,
+        mean_score=round(sum(item.score for item in materialized) / total, 4)
+        if total
+        else 0.0,
+    )

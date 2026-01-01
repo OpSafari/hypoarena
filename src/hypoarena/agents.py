@@ -27,6 +27,9 @@ from hypoarena.ids import (
     content_hash,
     make_id,
 )
+from hypoarena.text import (
+    content_tokens,
+)
 
 AGENT_TASKS = ("propose", "critique", "revise", "judge")
 
@@ -227,3 +230,95 @@ class BaseAgent:
             )
         self.usage.record(task, response)
         return response
+
+
+QUALITY_TIERS = ("vague", "focused", "mechanistic")
+VAGUE_PROPOSAL = "an intervention is associated with an outcome"
+
+
+def quality_tier(quality: float) -> str:
+    """Map a quality score in ``[0, 1]`` onto a named behaviour tier."""
+    if not 0.0 <= quality <= 1.0:
+        raise ValidationError("quality must lie within [0, 1]", quality=quality)
+    if quality < 1 / 3:
+        return QUALITY_TIERS[0]
+    if quality < 2 / 3:
+        return QUALITY_TIERS[1]
+    return QUALITY_TIERS[2]
+
+
+class ScriptedAgent(BaseAgent):
+    """Deterministic agent whose replies depend only on the request.
+
+    ``quality`` selects a behaviour tier: *vague* agents ignore the context and
+    return a generic statement, *focused* agents name the entities they were
+    given, and *mechanistic* agents add a mechanism and a measurement clause.
+    That ladder is what tournament tests use to plant a skill order — no model is
+    involved, and the ordering is exact by construction.
+    """
+
+    def __init__(
+        self,
+        name: str = "scripted",
+        *,
+        quality: float = 0.5,
+        model_tag: str = "scripted",
+    ) -> None:
+        super().__init__(name)
+        self.quality = quality
+        self.tier = quality_tier(quality)
+        self.model_tag = model_tag
+
+    def respond(self, request: AgentRequest) -> AgentResponse:
+        """Dispatch on the request's task and count words as token proxy."""
+        handler = self.handlers().get(request.task)
+        if handler is None:
+            raise AdapterError(
+                "scripted agent cannot handle this task",
+                agent=self.name,
+                task=request.task,
+            )
+        text = handler(request)
+        prompt_words = count_words(request.prompt) + sum(
+            count_words(line) for line in request.context
+        )
+        return AgentResponse(
+            request_id=request.request_id,
+            text=text,
+            agent=self.name,
+            prompt_tokens=prompt_words,
+            completion_tokens=count_words(text),
+            model=self.model_tag,
+        )
+
+    def handlers(self) -> dict[str, object]:
+        """Return the task handlers this agent implements."""
+        return {"propose": self.propose_text}
+
+    def context_terms(self, request: AgentRequest) -> tuple[str, ...]:
+        """Return the content tokens of the supplied context lines."""
+        return tuple(content_tokens(" ".join(request.context)))
+
+    def propose_text(self, request: AgentRequest) -> str:
+        """Build a proposal whose specificity follows the quality tier.
+
+        Specificity is monotone in ``quality`` by construction: each tier keeps
+        what the previous one said and adds a clause. Tournament tests rely on
+        that ordering, so the tiers must not be reordered casually.
+        """
+        terms = self.context_terms(request)
+        if self.tier == "vague" or len(terms) < 2:
+            return VAGUE_PROPOSAL
+        subject = terms[0]
+        target = next((term for term in reversed(terms) if term != subject), "")
+        if not target:
+            return VAGUE_PROPOSAL
+        if self.tier == "focused":
+            return f"{subject} increases {target} in the assayed population"
+        middle = next(
+            (term for term in terms if term not in (subject, target)), "the pathway"
+        )
+        return (
+            f"{subject} increases {target} through {middle} in the assayed "
+            "population, measured by dose response"
+        )

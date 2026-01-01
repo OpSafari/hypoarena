@@ -15,7 +15,7 @@ measures a real model: the adapters exist to make the loop itself testable.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -291,9 +291,9 @@ class ScriptedAgent(BaseAgent):
             model=self.model_tag,
         )
 
-    def handlers(self) -> dict[str, object]:
+    def handlers(self) -> dict[str, Callable[[AgentRequest], str]]:
         """Return the task handlers this agent implements."""
-        return {"propose": self.propose_text}
+        return {"propose": self.propose_text, "critique": self.critique_text}
 
     def context_terms(self, request: AgentRequest) -> tuple[str, ...]:
         """Return the content tokens of the supplied context lines."""
@@ -321,4 +321,23 @@ class ScriptedAgent(BaseAgent):
         return (
             f"{subject} increases {target} through {middle} in the assayed "
             "population, measured by dose response"
+        )
+
+    def critique_text(self, request: AgentRequest) -> str:
+        """Produce a critique whose specificity follows the quality tier.
+
+        A vague critique is content-free, a focused one names the entity the
+        claim is about and what is missing, and a mechanistic one lists all three
+        gaps (mechanism, assay, scope). The ladder is what makes critique quality
+        measurable without a model in the loop.
+        """
+        terms = self.context_terms(request)
+        if self.tier == "vague":
+            return "the claim needs more support"
+        subject = terms[0] if terms else "the subject"
+        if self.tier == "focused":
+            return f"the claim about {subject} does not name a testable assay"
+        return (
+            f"the claim about {subject} names no mechanism, no assay and a scope "
+            "wider than the cited evidence"
         )

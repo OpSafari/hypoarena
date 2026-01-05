@@ -293,7 +293,11 @@ class ScriptedAgent(BaseAgent):
 
     def handlers(self) -> dict[str, Callable[[AgentRequest], str]]:
         """Return the task handlers this agent implements."""
-        return {"propose": self.propose_text, "critique": self.critique_text}
+        return {
+            "propose": self.propose_text,
+            "critique": self.critique_text,
+            "revise": self.revise_text,
+        }
 
     def context_terms(self, request: AgentRequest) -> tuple[str, ...]:
         """Return the content tokens of the supplied context lines."""
@@ -341,3 +345,18 @@ class ScriptedAgent(BaseAgent):
             f"the claim about {subject} names no mechanism, no assay and a scope "
             "wider than the cited evidence"
         )
+
+    def revise_text(self, request: AgentRequest) -> str:
+        """Revise the statement carried in ``prompt``.
+
+        The critique travels in ``context``; a vague agent returns the statement
+        unchanged (which the evolution loop treats as no progress), a focused one
+        narrows the scope, and a mechanistic one also names the measurement that
+        would settle the claim.
+        """
+        statement = " ".join(request.prompt.split())
+        if self.tier == "vague":
+            return f"{statement} (unchanged)"
+        if self.tier == "focused":
+            return f"{statement} in the assayed population"
+        return f"{statement} in the assayed population, measured by dose response"

@@ -21,6 +21,7 @@ from typing import Protocol, runtime_checkable
 
 from hypoarena.errors import (
     AdapterError,
+    ReplayExhaustedError,
     ValidationError,
 )
 from hypoarena.ids import (
@@ -360,3 +361,148 @@ class ScriptedAgent(BaseAgent):
         if self.tier == "focused":
             return f"{statement} in the assayed population"
         return f"{statement} in the assayed population, measured by dose response"
+
+
+REPLAY_MODES = ("keyed", "sequence")
+
+
+@dataclass(frozen=True)
+class ReplayEntry:
+    """One recorded response, matched by task, prompt and context."""
+
+    task: str
+    prompt: str
+    text: str
+    agent: str = "replay"
+    context: tuple[str, ...] = ()
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    model: str = "replay"
+
+    def __post_init__(self) -> None:
+        if self.task not in AGENT_TASKS:
+            raise ValidationError(
+                "unknown replay task", task=self.task, allowed=list(AGENT_TASKS)
+            )
+        if not self.text.strip():
+            raise ValidationError("replay text must not be blank")
+        for name in ("prompt_tokens", "completion_tokens"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValidationError(f"replay {name} must be >= 0", **{name: value})
+
+    def key(self) -> tuple[str, str, tuple[str, ...]]:
+        """Return the lookup key: task, prompt and the exact context lines."""
+        return (self.task, self.prompt, self.context)
+
+    def response(self, request_id: str, agent: str | None = None) -> AgentResponse:
+        """Build the response this entry stands for.
+
+        ``agent`` names the adapter serving the fixture (the entry's own
+        ``agent`` field records where the text was originally captured). Token
+        counts default to whitespace word counts so replayed runs still produce
+        non-zero accounting; fixtures may pin exact numbers instead.
+        """
+        prompt_words = count_words(self.prompt) + sum(
+            count_words(line) for line in self.context
+        )
+        return AgentResponse(
+            request_id=request_id,
+            text=self.text,
+            agent=agent or self.agent,
+            prompt_tokens=(
+                prompt_words if self.prompt_tokens is None else self.prompt_tokens
+            ),
+            completion_tokens=(
+                count_words(self.text)
+                if self.completion_tokens is None
+                else self.completion_tokens
+            ),
+            model=self.model,
+        )
+
+
+class ReplayAgent(BaseAgent):
+    """Serves pre-recorded responses; never generates anything.
+
+    Two modes are supported. ``keyed`` looks entries up by ``(task, prompt,
+    context)`` and is the mode used by regression fixtures. ``sequence`` replays
+    entries in order and raises once the fixture runs out, which is how the debate
+    loop detects that a recorded transcript is shorter than the run.
+    """
+
+    def __init__(
+        self,
+        name: str = "replay",
+        entries: Sequence[ReplayEntry] = (),
+        *,
+        mode: str = "keyed",
+        fallback: str | None = None,
+    ) -> None:
+        super().__init__(name)
+        if mode not in REPLAY_MODES:
+            raise ValidationError(
+                "unknown replay mode", mode=mode, allowed=list(REPLAY_MODES)
+            )
+        self.mode = mode
+        self.fallback = fallback
+        self.entries = tuple(entries)
+        self._by_key: dict[tuple[str, str, tuple[str, ...]], ReplayEntry] = {}
+        for entry in self.entries:
+            if mode == "keyed" and entry.key() in self._by_key:
+                raise ValidationError(
+                    "duplicate replay entry", task=entry.task, prompt=entry.prompt
+                )
+            self._by_key.setdefault(entry.key(), entry)
+        self._cursor = 0
+
+    @property
+    def remaining(self) -> int:
+        """Entries left in ``sequence`` mode (all of them in ``keyed`` mode)."""
+        if self.mode == "sequence":
+            return max(0, len(self.entries) - self._cursor)
+        return len(self.entries)
+
+    def reset(self) -> None:
+        """Rewind a sequence replay to its first entry."""
+        self._cursor = 0
+
+    def respond(self, request: AgentRequest) -> AgentResponse:
+        """Return the recorded response for ``request``."""
+        if self.mode == "sequence":
+            if self._cursor >= len(self.entries):
+                raise ReplayExhaustedError(
+                    "replay fixture exhausted",
+                    agent=self.name,
+                    task=request.task,
+                    served=self._cursor,
+                )
+            entry = self.entries[self._cursor]
+            self._cursor += 1
+            if entry.task != request.task:
+                raise AdapterError(
+                    "replay entry does not match the requested task",
+                    agent=self.name,
+                    expected=entry.task,
+                    got=request.task,
+                    position=self._cursor - 1,
+                )
+            return entry.response(request.request_id, agent=self.name)
+        entry = self._by_key.get((request.task, request.prompt, request.context))
+        if entry is None:
+            if self.fallback is not None:
+                return AgentResponse(
+                    request_id=request.request_id,
+                    text=self.fallback,
+                    agent=self.name,
+                    prompt_tokens=count_words(request.prompt),
+                    completion_tokens=count_words(self.fallback),
+                    model="replay-fallback",
+                )
+            raise ReplayExhaustedError(
+                "no recorded response for this request",
+                agent=self.name,
+                task=request.task,
+                fingerprint=request.fingerprint(),
+            )
+        return entry.response(request.request_id, agent=self.name)

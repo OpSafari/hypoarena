@@ -228,3 +228,35 @@ def _cmd_rank(args: argparse.Namespace) -> int:
 
 
 COMMANDS.append(CommandSpec("rank", "rank claims with an Elo tournament", _cmd_rank))
+
+
+def _cmd_evolve(args: argparse.Namespace) -> int:
+    """Expand the graph with the evolution operators and report acceptance."""
+    pipeline = _run(args, up_to="evolve")
+    steps = pipeline.state.evolution
+    accepted = sum(step.accepted_count for step in steps)
+    rejected = sum(len(step.rejected) for step in steps)
+    print(f"evolve: {len(steps)} generations, {accepted} accepted, {rejected} rejected")
+    print(f"graph: {len(pipeline.state.graph.claims)} claims after evolution")
+    return 0
+
+
+COMMANDS.append(
+    CommandSpec("evolve", "expand the graph with evolution operators", _cmd_evolve)
+)
+
+
+def _cmd_accumulate(args: argparse.Namespace) -> int:
+    """Update beliefs from the graded evidence and print the top posteriors."""
+    pipeline = _run(args, up_to="accumulate")
+    beliefs = pipeline.state.beliefs
+    print(f"accumulate: {len(beliefs)} beliefs updated")
+    top = sorted(beliefs, key=lambda item: (-item.posterior, item.claim_id))[:5]
+    for belief in top:
+        print(f"  {belief.claim_id} posterior={belief.posterior:.4f}")
+    return 0
+
+
+COMMANDS.append(
+    CommandSpec("accumulate", "update beliefs from graded evidence", _cmd_accumulate)
+)

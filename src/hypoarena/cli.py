@@ -19,7 +19,7 @@ from hypoarena.artifacts import ArtifactStore
 from hypoarena.config import STAGES, RunConfig
 from hypoarena.errors import HypoArenaError
 from hypoarena.grounding import summarize_reports
-from hypoarena.runner import Pipeline
+from hypoarena.runner import Pipeline, run_report
 from hypoarena.synthetic import SyntheticConfig
 
 
@@ -259,4 +259,58 @@ def _cmd_accumulate(args: argparse.Namespace) -> int:
 
 COMMANDS.append(
     CommandSpec("accumulate", "update beliefs from graded evidence", _cmd_accumulate)
+)
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    """Run the full pipeline and report where the rendered reports were written."""
+    pipeline = _run(args)
+    payload = run_report(pipeline)
+    counts = payload["counts"]
+    recovered = payload["recovered"]
+    print(f"report: run {payload['run_id']}")
+    print(
+        f"  documents={counts['documents']} claims={counts['claims']} "
+        f"evidence={counts['evidence']}"
+    )
+    print(
+        f"  recovered {recovered['recovered']}/{recovered['planted']} planted "
+        f"links (rate {recovered['rate']})"
+    )
+    print(f"  json: {pipeline.store.path('report.json')}")
+    print(f"  markdown: {pipeline.store.path('report.md')}")
+    print(f"  html: {pipeline.store.path('report.html')}")
+    return 0
+
+
+COMMANDS.append(
+    CommandSpec("report", "run the full pipeline and write reports", _cmd_report)
+)
+
+
+def _cmd_demo(args: argparse.Namespace) -> int:
+    """Run a small offline demo and print recovered versus planted hypotheses.
+
+    This is the one-shot, fully offline end-to-end path: it builds a synthetic
+    corpus with planted causal chains, runs the whole pipeline and reports which
+    planted links the run recovered. It demonstrates the mechanism only and makes
+    no claim about real scientific discovery.
+    """
+    pipeline = _run(args)
+    payload = run_report(pipeline)
+    recovered = payload["recovered"]
+    print("hypoarena demo - offline synthetic corpus with planted ground truth")
+    print(
+        f"planted links: {recovered['planted']}   "
+        f"recovered: {recovered['recovered']}   rate: {recovered['rate']}"
+    )
+    for link in recovered["links"]:
+        mark = "recovered" if link["recovered"] else "MISSING"
+        print(f"  [{mark}] {link['statement']}")
+    print("note: a synthetic demonstration only; no claim about real discovery.")
+    return 0
+
+
+COMMANDS.append(
+    CommandSpec("demo", "run a small offline end-to-end demonstration", _cmd_demo)
 )

@@ -506,3 +506,45 @@ class ReplayAgent(BaseAgent):
                 fingerprint=request.fingerprint(),
             )
         return entry.response(request.request_id, agent=self.name)
+
+
+@dataclass(frozen=True)
+class TranscriptTurn:
+    """One recorded step of a generate-critique-revise transcript."""
+
+    task: str
+    prompt: str
+    response: AgentResponse
+
+
+def replay_transcript(
+    agent: DiscoveryAgent,
+    proposal_prompt: str,
+    context: Sequence[str] = (),
+    *,
+    rounds: int = 1,
+) -> tuple[TranscriptTurn, ...]:
+    """Run a propose → (critique → revise) loop and return the transcript.
+
+    The helper is adapter-agnostic: a scripted agent, a replay fixture and the
+    HTTP adapter all produce the same transcript shape, which is what lets the
+    debate loop be tested against fixtures and later pointed at a real service
+    without changing callers.
+    """
+    if rounds < 0:
+        raise ValidationError("transcript rounds must be >= 0", rounds=rounds)
+    proposal = agent.propose(proposal_prompt, context)
+    turns = [TranscriptTurn("propose", proposal_prompt, proposal)]
+    statement = proposal.text
+    for _round in range(rounds):
+        critique = agent.critique(statement, context)
+        turns.append(TranscriptTurn("critique", statement, critique))
+        revision = agent.revise(statement, (critique.text,))
+        turns.append(TranscriptTurn("revise", statement, revision))
+        statement = revision.text
+    return tuple(turns)
+
+
+def transcript_statement(turns: Sequence[TranscriptTurn]) -> str:
+    """Return the statement a transcript converged on."""
+    return turns[-1].response.text if turns else ""

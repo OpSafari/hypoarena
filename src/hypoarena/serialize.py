@@ -18,6 +18,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from hypoarena.agents import ReplayAgent, ReplayEntry
 from hypoarena.codec import (
     check_schema_version,
     dumps_line,
@@ -1214,3 +1215,115 @@ def grounding_reports_from_lines(
             count_keys=GROUNDING_COUNT_KEYS,
         )
     return tuple(reports)
+
+
+REPLAY_ENTRY_KEYS = (
+    "task",
+    "prompt",
+    "text",
+    "agent",
+    "context",
+    "prompt_tokens",
+    "completion_tokens",
+    "model",
+)
+REPLAY_LINE_KEYS = ("record", "entry")
+REPLAY_COUNT_KEYS = ("entries",)
+
+
+def replay_entry_to_dict(entry: ReplayEntry) -> dict[str, Any]:
+    """Encode one replay fixture entry."""
+    return {
+        "task": entry.task,
+        "prompt": entry.prompt,
+        "text": entry.text,
+        "agent": entry.agent,
+        "context": list(entry.context),
+        "prompt_tokens": entry.prompt_tokens,
+        "completion_tokens": entry.completion_tokens,
+        "model": entry.model,
+    }
+
+
+def replay_entry_from_dict(payload: object, *, field: str = "entry") -> ReplayEntry:
+    """Decode one replay fixture entry."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, REPLAY_ENTRY_KEYS, field=field)
+    return ReplayEntry(
+        task=require_str(mapping, "task", field=field),
+        prompt=require_str(mapping, "prompt", field=field),
+        text=require_str(mapping, "text", field=field),
+        agent=require_str(mapping, "agent", field=field),
+        context=require_str_tuple(mapping, "context", field=field),
+        prompt_tokens=optional_int(mapping, "prompt_tokens", field=field, minimum=0),
+        completion_tokens=optional_int(
+            mapping, "completion_tokens", field=field, minimum=0
+        ),
+        model=require_str(mapping, "model", field=field),
+    )
+
+
+def replay_entries_to_lines(entries: Sequence[ReplayEntry]) -> list[str]:
+    """Serialize replay entries as JSONL lines with a counting header."""
+    return [
+        meta_line(
+            {"entries": len(entries)},
+            content_hash([replay_entry_to_dict(entry) for entry in entries]),
+        ),
+        *(
+            dumps_line({"record": "replay", "entry": replay_entry_to_dict(entry)})
+            for entry in entries
+        ),
+    ]
+
+
+def replay_entries_from_lines(lines: Iterable[str]) -> tuple[ReplayEntry, ...]:
+    """Load replay entries, verifying the header count and digest."""
+    entries: list[ReplayEntry] = []
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="replay", line_number=number)
+        record = require_str(payload, "record", field=f"replay[{number}]")
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"replay[{number}]")
+            meta = payload
+            continue
+        if record != "replay":
+            raise SchemaError(
+                "unknown replay record type",
+                field=f"replay[{number}]",
+                line_number=number,
+                got=record,
+                allowed=["meta", "replay"],
+            )
+        reject_unknown_keys(payload, REPLAY_LINE_KEYS, field=f"replay[{number}]")
+        entries.append(
+            replay_entry_from_dict(payload["entry"], field=f"replay[{number}].entry")
+        )
+    check_document_meta(
+        meta,
+        counts={"entries": len(entries)},
+        signature=content_hash([replay_entry_to_dict(entry) for entry in entries]),
+        kind="replay",
+        count_keys=REPLAY_COUNT_KEYS,
+    )
+    return tuple(entries)
+
+
+def read_replay_entries(path: Path | str) -> tuple[ReplayEntry, ...]:
+    """Read a replay fixture from disk."""
+    return replay_entries_from_lines(iter_lines(path))
+
+
+def write_replay_entries(entries: Sequence[ReplayEntry], path: Path | str) -> int:
+    """Write a replay fixture atomically; return the line count."""
+    return write_lines(replay_entries_to_lines(entries), path)
+
+
+def replay_agent_from_lines(
+    name: str, lines: Iterable[str], *, mode: str = "sequence"
+) -> ReplayAgent:
+    """Build a replay agent straight from a fixture document."""
+    return ReplayAgent(name, replay_entries_from_lines(lines), mode=mode)

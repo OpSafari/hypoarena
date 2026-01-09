@@ -86,3 +86,63 @@ class HttpConfig:
             "retry_backoff": self.retry_backoff,
             "retry_statuses": list(self.retry_statuses),
         }
+
+
+MESSAGE_ROLES = ("system", "user", "assistant")
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """One chat message in the request payload."""
+
+    role: str
+    content: str
+
+    def __post_init__(self) -> None:
+        if self.role not in MESSAGE_ROLES:
+            raise ValidationError(
+                "unknown message role", role=self.role, allowed=list(MESSAGE_ROLES)
+            )
+        if not self.content.strip():
+            raise ValidationError("message content must not be blank")
+
+    def to_dict(self) -> dict[str, str]:
+        """Return the wire representation of this message."""
+        return {"role": self.role, "content": self.content}
+
+
+@dataclass(frozen=True)
+class ChatRequest:
+    """A chat-completions request body."""
+
+    model: str
+    messages: tuple[ChatMessage, ...]
+    temperature: float = 0.0
+    max_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.messages:
+            raise ValidationError("a chat request needs at least one message")
+        if self.temperature < 0:
+            raise ValidationError(
+                "temperature must be >= 0", temperature=self.temperature
+            )
+        if self.max_tokens is not None and self.max_tokens < 1:
+            raise ValidationError(
+                "max_tokens must be >= 1 when set", max_tokens=self.max_tokens
+            )
+
+    def to_payload(self) -> dict[str, object]:
+        """Return the JSON body to POST.
+
+        ``max_tokens`` is omitted when unset so services that reject a null value
+        still accept the request.
+        """
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": [message.to_dict() for message in self.messages],
+            "temperature": self.temperature,
+        }
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
+        return payload

@@ -337,3 +337,20 @@ class HttpAgent(BaseAgent):
         delay = self.config.retry_backoff * attempt
         if delay > 0:
             sleep(delay)
+
+
+def retry_delay(config: HttpConfig, attempt: int) -> float:
+    """Return the delay before retrying after ``attempt`` failed POSTs.
+
+    The schedule is linear and jitter-free so retry behaviour stays reproducible
+    in tests; a real deployment that needs to avoid thundering herds should wrap
+    the transport instead of changing this contract.
+    """
+    if attempt < 1:
+        raise ValidationError("attempt must be >= 1", attempt=attempt)
+    return config.retry_backoff * attempt
+
+
+def retry_budget(config: HttpConfig) -> int:
+    """Return how many POSTs a single call may make in the worst case."""
+    return config.max_retries + 1

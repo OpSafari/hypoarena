@@ -144,3 +144,10 @@ def test_golden_registry_snapshot() -> None:
         "unknown_reference",
         "validation_error",
     ]
+
+
+def test_transport_error_carries_extra_details() -> None:
+    error = TransportError("bad json", status=200, attempts=1, reason="truncated")
+    assert error.details["reason"] == "truncated"
+    assert error.status == 200
+    assert "reason='truncated'" in str(error)

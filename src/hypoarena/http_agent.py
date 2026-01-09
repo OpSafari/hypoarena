@@ -27,6 +27,9 @@ from hypoarena.errors import (
     TransportError,
     ValidationError,
 )
+from hypoarena.ids import (
+    content_hash,
+)
 
 DEFAULT_RETRY_STATUSES: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
 DEFAULT_TIMEOUT = 5.0
@@ -49,6 +52,7 @@ class HttpConfig:
     max_retries: int = 2
     retry_backoff: float = 0.0
     retry_statuses: tuple[int, ...] = DEFAULT_RETRY_STATUSES
+    allow_remote: bool = False
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.base_url)
@@ -97,7 +101,12 @@ class HttpConfig:
             "max_retries": self.max_retries,
             "retry_backoff": self.retry_backoff,
             "retry_statuses": list(self.retry_statuses),
+            "allow_remote": self.allow_remote,
         }
+
+    def fingerprint(self) -> str:
+        """Return a digest of the redacted view, safe to store in artifacts."""
+        return content_hash(self.redacted())
 
 
 MESSAGE_ROLES = ("system", "user", "assistant")
@@ -287,14 +296,15 @@ class HttpAgent(BaseAgent):
 
     def respond(self, request: AgentRequest) -> AgentResponse:
         """POST one request, applying the retry policy from the config."""
+        url = self.config.endpoint()
+        check_endpoint(url, allow_remote=self.config.allow_remote)
+        headers = self.config.headers()
         payload = ChatRequest(
             model=self.config.model,
             messages=self.messages_for(request),
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         ).to_payload()
-        url = self.config.endpoint()
-        headers = self.config.headers()
         attempts = 0
         while True:
             attempts += 1
@@ -354,3 +364,28 @@ def retry_delay(config: HttpConfig, attempt: int) -> float:
 def retry_budget(config: HttpConfig) -> int:
     """Return how many POSTs a single call may make in the worst case."""
     return config.max_retries + 1
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def is_loopback(url: str) -> bool:
+    """True when a URL points at this machine."""
+    host = urlparse(url).hostname or ""
+    return host in LOOPBACK_HOSTS
+
+
+def check_endpoint(url: str, *, allow_remote: bool) -> None:
+    """Refuse to call a non-loopback endpoint unless explicitly allowed.
+
+    Tests and examples in this repository only ever talk to a local mock, and
+    this guard keeps that true by construction: a misconfigured base URL fails
+    before a single byte is sent.
+    """
+    if allow_remote or is_loopback(url):
+        return
+    raise TransportError(
+        "refusing to call a non-loopback endpoint",
+        url=url,
+        hint="set allow_remote=True on HttpConfig to permit it",
+    )

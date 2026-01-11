@@ -34,6 +34,7 @@ from hypoarena.codec import (
     require_float,
     require_float_list,
     require_int,
+    require_int_list,
     require_mapping,
     require_mapping_list,
     require_str,
@@ -49,6 +50,7 @@ from hypoarena.grounding import (
     GroundingReport,
     summarize_reports,
 )
+from hypoarena.http_agent import HttpConfig
 from hypoarena.ids import content_hash
 from hypoarena.schema import (
     SCHEMA_VERSION,
@@ -1327,3 +1329,48 @@ def replay_agent_from_lines(
 ) -> ReplayAgent:
     """Build a replay agent straight from a fixture document."""
     return ReplayAgent(name, replay_entries_from_lines(lines), mode=mode)
+
+
+HTTP_CONFIG_KEYS = (
+    "base_url",
+    "model",
+    "api_key",
+    "timeout",
+    "max_retries",
+    "retry_backoff",
+    "retry_statuses",
+    "allow_remote",
+)
+
+
+def http_config_to_dict(config: HttpConfig) -> dict[str, Any]:
+    """Encode an adapter configuration for run metadata.
+
+    The encoded form is the *redacted* view: a key is replaced by a mask, so an
+    artifact written from it can be shared without leaking a credential.
+    """
+    return dict(config.redacted())
+
+
+def http_config_from_dict(payload: object, *, field: str = "http") -> HttpConfig:
+    """Decode an adapter configuration, ignoring any stored credential.
+
+    ``api_key`` is never read back: a configuration restored from an artifact
+    always starts without one, and callers must supply a key explicitly if they
+    intend to make authenticated calls.
+    """
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, HTTP_CONFIG_KEYS, field=field)
+    return HttpConfig(
+        base_url=require_str(mapping, "base_url", field=field),
+        model=require_str(mapping, "model", field=field),
+        api_key=None,
+        timeout=require_float(mapping, "timeout", field=field, minimum=0.000001),
+        max_retries=require_int(mapping, "max_retries", field=field, minimum=0),
+        retry_backoff=require_float(mapping, "retry_backoff", field=field, minimum=0.0),
+        retry_statuses=tuple(
+            int(value)
+            for value in require_int_list(mapping, "retry_statuses", field=field)
+        ),
+        allow_remote=require_bool(mapping, "allow_remote", field=field),
+    )

@@ -398,3 +398,21 @@ def require_enum_list(
         require_enum({"v": item}, "v", enum_type, field=f"{field}.{key}[{index}]")
         for index, item in enumerate(value)
     )
+
+
+def require_int_list(
+    mapping: Mapping[str, Any], key: str, *, field: str
+) -> tuple[int, ...]:
+    """Read ``key`` as a list of integers."""
+    value = present_value(mapping, key, field=field)
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise SchemaError(
+            f"{field}.{key} must be a list",
+            field=field,
+            key=key,
+            got=type(value).__name__,
+        )
+    return tuple(
+        require_int({"v": item}, "v", field=f"{field}.{key}[{index}]")
+        for index, item in enumerate(value)
+    )

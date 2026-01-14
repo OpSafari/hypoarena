@@ -57,5 +57,7 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | `hypoarena.corpus` | 文档与语料容器，citation 的真值解析 |
 | `hypoarena.synthetic` | 植入因果链/竞争假设/改写簇的合成语料与 gold 记录 |
 | `hypoarena.grounding` | 引用解析、实体重合、极性与数字一致性校验，输出分级 flag |
+| `hypoarena.agents` | agent 协议、脚本化/回放/录制适配器与 token 记账 |
+| `hypoarena.http_agent` | OpenAI 兼容 HTTP 客户端、重试策略与 loopback 保护 |
 
 模块表随实现推进补充；接口约定见 [api.md](api.md)。

@@ -234,6 +234,9 @@ class BaseAgent:
 
 
 QUALITY_TIERS = ("vague", "focused", "mechanistic")
+NO_PROGRESS_MARKER = "(unchanged)"
+FOCUSED_SUFFIX = " when assayed in the same population"
+MECHANISTIC_SUFFIX = " when assayed in the same population, quantified by dose response"
 VAGUE_PROPOSAL = "an intervention is associated with an outcome"
 
 
@@ -350,17 +353,19 @@ class ScriptedAgent(BaseAgent):
     def revise_text(self, request: AgentRequest) -> str:
         """Revise the statement carried in ``prompt``.
 
-        The critique travels in ``context``; a vague agent returns the statement
-        unchanged (which the evolution loop treats as no progress), a focused one
-        narrows the scope, and a mechanistic one also names the measurement that
-        would settle the claim.
+        The critique travels in ``context``; a vague agent marks the statement
+        unchanged, a focused one narrows the scope, and a mechanistic one also
+        names the measurement that would settle the claim. Each tier is a fixed
+        point of itself, so a debate loop can detect convergence by comparing
+        statements instead of counting rounds.
         """
         statement = " ".join(request.prompt.split())
         if self.tier == "vague":
-            return f"{statement} (unchanged)"
-        if self.tier == "focused":
-            return f"{statement} in the assayed population"
-        return f"{statement} in the assayed population, measured by dose response"
+            if statement.endswith(NO_PROGRESS_MARKER):
+                return statement
+            return f"{statement} {NO_PROGRESS_MARKER}"
+        suffix = FOCUSED_SUFFIX if self.tier == "focused" else MECHANISTIC_SUFFIX
+        return statement if statement.endswith(suffix) else f"{statement}{suffix}"
 
 
 REPLAY_MODES = ("keyed", "sequence")

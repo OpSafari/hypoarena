@@ -16,13 +16,15 @@ def test_vague_revisions_do_not_progress() -> None:
 
 def test_focused_revisions_narrow_the_scope() -> None:
     response = ScriptedAgent("f", quality=0.5).revise(CLAIM, CRITIQUE)
-    assert response.text == "protein A increases cell growth in the assayed population"
+    assert response.text == (
+        "protein A increases cell growth when assayed in the same population"
+    )
 
 
 def test_mechanistic_revisions_add_a_measurement() -> None:
     response = ScriptedAgent("m", quality=0.9).revise(CLAIM, CRITIQUE)
-    assert response.text.endswith("measured by dose response")
-    assert "assayed population" in response.text
+    assert response.text.endswith("quantified by dose response")
+    assert "when assayed in the same population" in response.text
 
 
 def test_revision_collapses_prompt_whitespace() -> None:

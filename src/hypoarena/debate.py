@@ -11,7 +11,7 @@ agents.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from hypoarena.agents import (
     AgentResponse,
@@ -24,11 +24,15 @@ from hypoarena.corpus import (
 from hypoarena.errors import (
     ValidationError,
 )
+from hypoarena.graph import (
+    HypothesisGraph,
+)
 from hypoarena.ids import (
     content_hash,
 )
 from hypoarena.schema import (
     Claim,
+    Provenance,
 )
 from hypoarena.text import (
     normalize,
@@ -342,3 +346,43 @@ def claim_context(claims: Iterable[Claim], *, limit: int = 6) -> tuple[str, ...]
     if limit < 1:
         raise ValidationError("context limit must be >= 1", limit=limit)
     return tuple(claim.statement for claim in list(claims)[:limit])
+
+
+def revised_claim(
+    claim: Claim, result: DebateResult, *, agent_id: str | None = None
+) -> Claim:
+    """Return a copy of ``claim`` whose statement is the debate's outcome.
+
+    Citations are preserved so grounding can be re-checked after revision, and
+    provenance records the debate: origin ``agent``, the proposer's name (or
+    ``agent_id``), generation incremented, the original claim as parent and the
+    round count in ``notes``.
+    """
+    if not result.final_statement.strip():
+        raise ValidationError("debate produced no statement")
+    if not result.agents:
+        raise ValidationError("debate result names no agents")
+    provenance = Provenance(
+        origin="agent",
+        agent_id=agent_id or result.agents[0],
+        generation=claim.provenance.generation + 1,
+        parents=(claim.claim_id,),
+        seed=claim.provenance.seed,
+        corpus_hash=claim.provenance.corpus_hash,
+        notes=f"debate:{result.rounds_run}",
+    )
+    return replace(claim, statement=result.final_statement, provenance=provenance)
+
+
+def apply_debate(
+    graph: HypothesisGraph,
+    claim_id: str,
+    result: DebateResult,
+    *,
+    agent_id: str | None = None,
+) -> Claim:
+    """Revise one claim inside a graph, keeping its links and edges."""
+    revised = revised_claim(graph.claim(claim_id), result, agent_id=agent_id)
+    graph.replace_claim(revised)
+    graph.validate()
+    return revised

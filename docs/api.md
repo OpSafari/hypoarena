@@ -22,7 +22,7 @@
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | `hypoarena._version` | 已实现 | 版本号（`__version__`、`VERSION_TUPLE`） |
-| `hypoarena.cli` | 已实现 | 参数解析与子命令入口（`main`、`build_parser`） |
+| `hypoarena.cli` | 已实现 | 子命令 CLI（corpus/generate/verify/dedup/debate/rank/evolve/accumulate/report/demo）、退出码映射与离线 demo（`main`、`build_parser`、`COMMANDS`），见 [cli.md](cli.md) |
 | `hypoarena.errors` | 已实现 | 异常层级，每个错误带稳定 `code` 与 `exit_code`（`ERROR_CODES`、`error_for_code`） |
 | `hypoarena.ids` | 已实现 | 确定性哈希与 ID（`canonical_json`、`stable_hash`、`content_hash`、`hash_parts`、`make_id`、`is_valid_id`） |
 | `hypoarena.codec` | 已实现 | 严格解码与规范 JSONL 行（`require_*`、`reject_unknown_keys`、`check_schema_version`、`dumps_line`、`loads_line`） |

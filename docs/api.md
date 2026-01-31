@@ -34,6 +34,7 @@
 | `hypoarena.grounding` | 已实现 | span 级 grounding 校验（`GroundingVerifier`、`VerifierConfig`、`GroundingReport`、`GroundingFlag`），见 [grounding.md](grounding.md) |
 | `hypoarena.agents` | 已实现 | agent 协议与离线适配器（`ScriptedAgent`、`ReplayAgent`、`RecordingAgent`、`replay_transcript`、`Usage`），见 [agents.md](agents.md) |
 | `hypoarena.http_agent` | 已实现 | OpenAI 兼容 HTTP 适配器（`HttpConfig`、`HttpAgent`、`ChatRequest`、`ChatResponse`），默认仅允许 loopback |
+| `hypoarena.debate` | 已实现 | 辩论循环与记录（`DebateLoop`、`DebateConfig`、`DebateResult`、`DebateTurn`、`corpus_context`、`apply_debate`），见 [debate.md](debate.md) |
 | `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
 
 记录字段与校验规则详见 [schema.md](schema.md)。后续模块（graph、corpus、

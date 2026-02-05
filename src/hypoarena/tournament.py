@@ -18,6 +18,9 @@ from dataclasses import dataclass
 from hypoarena.errors import (
     ValidationError,
 )
+from hypoarena.ids import (
+    content_hash,
+)
 
 RUBRIC_DIMENSIONS: tuple[str, ...] = (
     "novelty",
@@ -75,3 +78,67 @@ class RubricScore:
     def mean(self) -> float:
         """Return the unweighted mean of the four dimensions."""
         return sum(self.as_tuple()) / len(RUBRIC_DIMENSIONS)
+
+
+@dataclass(frozen=True)
+class RubricWeights:
+    """How much each rubric dimension contributes to a match verdict.
+
+    Weights only have to be non-negative with a positive sum; :meth:`normalized`
+    rescales them to sum to one so a weighted total is always within ``[0, 1]``
+    and two configurations that differ only by scale behave identically.
+    """
+
+    novelty: float = 0.25
+    testability: float = 0.30
+    grounding: float = 0.30
+    consistency: float = 0.15
+
+    def __post_init__(self) -> None:
+        for dimension in RUBRIC_DIMENSIONS:
+            value = getattr(self, dimension)
+            if value < 0:
+                raise ValidationError(
+                    f"rubric weight for {dimension} must be >= 0",
+                    dimension=dimension,
+                    value=value,
+                )
+        if self.total() <= 0:
+            raise ValidationError("rubric weights must sum to more than zero")
+
+    def weight(self, name: str) -> float:
+        """Return one dimension's weight by name."""
+        if name not in RUBRIC_DIMENSIONS:
+            raise ValidationError(
+                "unknown rubric dimension",
+                dimension=name,
+                allowed=list(RUBRIC_DIMENSIONS),
+            )
+        return float(getattr(self, name))
+
+    def total(self) -> float:
+        """Return the raw weight sum."""
+        return sum(self.weight(name) for name in RUBRIC_DIMENSIONS)
+
+    def normalized(self) -> RubricWeights:
+        """Return weights rescaled to sum to one."""
+        total = self.total()
+        return RubricWeights(
+            **{name: self.weight(name) / total for name in RUBRIC_DIMENSIONS}
+        )
+
+    def as_dict(self) -> dict[str, float]:
+        """Return a JSON-ready view keyed by dimension."""
+        return {name: self.weight(name) for name in RUBRIC_DIMENSIONS}
+
+    def fingerprint(self) -> str:
+        """Return a digest of the normalized weights."""
+        return content_hash(self.normalized().as_dict())
+
+
+def weighted_total(score: RubricScore, weights: RubricWeights) -> float:
+    """Return the weighted rubric total in ``[0, 1]``."""
+    normalized = weights.normalized()
+    return sum(
+        score.dimension(name) * normalized.weight(name) for name in RUBRIC_DIMENSIONS
+    )

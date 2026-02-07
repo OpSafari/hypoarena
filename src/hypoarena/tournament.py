@@ -19,6 +19,7 @@ from random import Random
 from typing import Protocol, runtime_checkable
 
 from hypoarena.errors import (
+    DuplicateIdError,
     UnknownReferenceError,
     ValidationError,
 )
@@ -614,3 +615,157 @@ def pair_count(subjects: Sequence[str]) -> int:
     """Return how many matches one round contains."""
     size = len(set(subjects))
     return size * (size - 1) // 2
+
+
+@dataclass(frozen=True)
+class TournamentConfig:
+    """Seed, schedule size and the models a tournament runs with."""
+
+    seed: int = 0
+    repeats: int = 1
+    model: EloModel = field(default_factory=EloModel)
+    weights: RubricWeights = field(default_factory=RubricWeights)
+
+    def __post_init__(self) -> None:
+        if self.repeats < 1:
+            raise ValidationError("repeats must be >= 1", repeats=self.repeats)
+
+    def fingerprint(self) -> str:
+        """Return a digest covering every setting that affects the outcome."""
+        return content_hash(
+            {
+                "seed": self.seed,
+                "repeats": self.repeats,
+                "model": self.model.fingerprint(),
+                "weights": self.weights.fingerprint(),
+            }
+        )
+
+
+@dataclass(frozen=True)
+class TournamentResult:
+    """Standings plus the complete match audit trail of one tournament."""
+
+    subjects: tuple[str, ...]
+    ratings: tuple[Rating, ...]
+    matches: tuple[MatchResult, ...]
+    config: TournamentConfig
+
+    def ranking(self) -> tuple[str, ...]:
+        """Return subject identifiers from best to worst rated."""
+        return tuple(rating.subject for rating in self.ratings)
+
+    def rating(self, subject: str) -> Rating:
+        """Return one subject's rating."""
+        for entry in self.ratings:
+            if entry.subject == subject:
+                return entry
+        raise UnknownReferenceError(subject, "tournament subject")
+
+    def standings(self) -> tuple[dict[str, object], ...]:
+        """Return ranked rows ready for a report table."""
+        return tuple(
+            {"position": position, **rating.as_dict()}
+            for position, rating in enumerate(self.ratings, start=1)
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready summary (matches are serialized separately)."""
+        return {
+            "subjects": list(self.subjects),
+            "matches": len(self.matches),
+            "seed": self.config.seed,
+            "repeats": self.config.repeats,
+            "config_fingerprint": self.config.fingerprint(),
+            "standings": list(self.standings()),
+        }
+
+    def signature(self) -> str:
+        """Return a digest over standings and the audit trail."""
+        return content_hash(
+            {
+                "standings": list(self.standings()),
+                "matches": [match.as_dict() for match in self.matches],
+                "config": self.config.fingerprint(),
+            }
+        )
+
+
+class Tournament:
+    """Runs a judged round-robin and maintains the ratings table."""
+
+    def __init__(self, judge: Judge, config: TournamentConfig | None = None) -> None:
+        if not isinstance(judge, Judge):
+            raise ValidationError(
+                "judge must satisfy the Judge protocol", got=type(judge).__name__
+            )
+        self.judge = judge
+        self.config = config or TournamentConfig()
+
+    def run(self, claims: Sequence[Claim]) -> TournamentResult:
+        """Judge every scheduled pairing and return the final standings.
+
+        Claims are matched by identifier, so the same claim list always produces
+        the same schedule; ratings start at the model's initial value and are
+        updated after each match using both sides' experience (matches played).
+        """
+        by_id: dict[str, Claim] = {}
+        for claim in claims:
+            if claim.claim_id in by_id:
+                raise DuplicateIdError(claim.claim_id, "claim")
+            by_id[claim.claim_id] = claim
+        if len(by_id) < 2:
+            raise ValidationError(
+                "a tournament needs at least two distinct claims", count=len(by_id)
+            )
+        subjects = tuple(sorted(by_id))
+        model = self.config.model
+        ratings = {subject: Rating(subject, model.initial) for subject in subjects}
+        matches: list[MatchResult] = []
+        per_round = pair_count(subjects)
+        schedule = round_robin_pairings(
+            subjects, repeats=self.config.repeats, seed=self.config.seed
+        )
+        for index, (left_id, right_id) in enumerate(schedule):
+            left_claim = by_id[left_id]
+            right_claim = by_id[right_id]
+            left_score = self.judge.score(left_claim, opponent=right_claim)
+            right_score = self.judge.score(right_claim, opponent=left_claim)
+            left_total = weighted_total(left_score, self.config.weights)
+            right_total = weighted_total(right_score, self.config.weights)
+            outcome = model.outcome(left_total, right_total)
+            left_rating = ratings[left_id]
+            right_rating = ratings[right_id]
+            left_elo, right_elo = model.update(
+                left_rating.elo,
+                right_rating.elo,
+                outcome,
+                left_played=left_rating.played,
+                right_played=right_rating.played,
+            )
+            ratings[left_id] = left_rating.advanced(outcome, left_elo)
+            ratings[right_id] = right_rating.advanced(1.0 - outcome, right_elo)
+            matches.append(
+                MatchResult(
+                    left=left_id,
+                    right=right_id,
+                    left_score=left_score,
+                    right_score=right_score,
+                    left_total=left_total,
+                    right_total=right_total,
+                    outcome=outcome,
+                    judge=self.judge.name,
+                    round_index=index // per_round,
+                    match_index=index,
+                    seed=self.config.seed,
+                )
+            )
+        ordered = tuple(
+            sorted(ratings.values(), key=lambda rating: (-rating.elo, rating.subject))
+        )
+        return TournamentResult(
+            subjects=subjects,
+            ratings=ordered,
+            matches=tuple(matches),
+            config=self.config,
+        )

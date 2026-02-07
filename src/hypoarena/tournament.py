@@ -14,7 +14,7 @@ planted qualities on synthetic claims for exactly that reason.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from random import Random
 from typing import Protocol, runtime_checkable
 
@@ -22,11 +22,22 @@ from hypoarena.errors import (
     UnknownReferenceError,
     ValidationError,
 )
+from hypoarena.graph import (
+    HypothesisGraph,
+)
+from hypoarena.grounding import (
+    GroundingReport,
+)
 from hypoarena.ids import (
     content_hash,
 )
 from hypoarena.schema import (
     Claim,
+    ClaimRelation,
+    is_directional,
+)
+from hypoarena.text import (
+    content_tokens,
 )
 
 RUBRIC_DIMENSIONS: tuple[str, ...] = (
@@ -480,3 +491,87 @@ class PlantedJudge:
             offset = (rng.random() - 0.5) * 2 * self.noise
             values.append(min(SCORE_MAXIMUM, max(SCORE_MINIMUM, base + offset)))
         return RubricScore(*values)
+
+
+TESTABILITY_BASE = 0.4
+TESTABILITY_STEP = 0.2
+CONSISTENCY_PENALTY = 0.25
+DEFAULT_NOVELTY_SCALE = 12
+
+
+@dataclass(frozen=True)
+class FeatureJudge:
+    """Judge that scores inspectable features of a claim.
+
+    Where each dimension comes from:
+
+    * ``grounding`` — the claim's grounding score when a report is known,
+      otherwise 1.0 for a cited claim and 0.0 for an uncited one;
+    * ``testability`` — 0.4 plus 0.2 for a directional relation, 0.2 for a named
+      mechanism and 0.2 for a narrowed scope;
+    * ``novelty`` — the statement's content-token count relative to
+      ``novelty_scale``, capped at 1.0;
+    * ``consistency`` — 1.0 minus 0.25 per contradicting edge, floored at 0.
+
+    Every input is inspectable, so a ranking produced by this judge can be
+    explained claim by claim. It is a *preference model over features*, not an
+    assessment of scientific truth.
+    """
+
+    reports: Mapping[str, GroundingReport] = field(default_factory=dict)
+    contradictions: Mapping[str, int] = field(default_factory=dict)
+    novelty_scale: int = DEFAULT_NOVELTY_SCALE
+    name: str = "features"
+
+    def __post_init__(self) -> None:
+        if self.novelty_scale < 1:
+            raise ValidationError(
+                "novelty_scale must be >= 1", novelty_scale=self.novelty_scale
+            )
+
+    def grounding_for(self, claim: Claim) -> float:
+        """Return the grounding dimension for one claim."""
+        report = self.reports.get(claim.claim_id)
+        if report is not None:
+            return float(report.score)
+        return 1.0 if claim.is_cited else 0.0
+
+    def testability_for(self, claim: Claim) -> float:
+        """Return the testability dimension for one claim."""
+        total = TESTABILITY_BASE
+        if is_directional(claim.relation):
+            total += TESTABILITY_STEP
+        if claim.mechanism is not None:
+            total += TESTABILITY_STEP
+        if claim.scope.conditions:
+            total += TESTABILITY_STEP
+        return min(SCORE_MAXIMUM, total)
+
+    def novelty_for(self, claim: Claim) -> float:
+        """Return the novelty dimension for one claim."""
+        tokens = len(content_tokens(claim.statement))
+        return min(SCORE_MAXIMUM, tokens / self.novelty_scale)
+
+    def consistency_for(self, claim: Claim) -> float:
+        """Return the consistency dimension for one claim."""
+        conflicts = self.contradictions.get(claim.claim_id, 0)
+        return max(SCORE_MINIMUM, 1.0 - CONSISTENCY_PENALTY * conflicts)
+
+    def score(self, claim: Claim, *, opponent: Claim | None = None) -> RubricScore:
+        """Score a claim on all four rubric dimensions."""
+        return RubricScore(
+            novelty=self.novelty_for(claim),
+            testability=self.testability_for(claim),
+            grounding=self.grounding_for(claim),
+            consistency=self.consistency_for(claim),
+        )
+
+
+def graph_contradiction_counts(graph: HypothesisGraph) -> dict[str, int]:
+    """Count the ``contradicts`` edges touching each claim in a graph."""
+    counts: dict[str, int] = {}
+    for edge in graph.edges:
+        if edge.relation is ClaimRelation.CONTRADICTS:
+            counts[edge.source] = counts.get(edge.source, 0) + 1
+            counts[edge.target] = counts.get(edge.target, 0) + 1
+    return counts

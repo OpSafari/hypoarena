@@ -13,7 +13,10 @@ planted qualities on synthetic claims for exactly that reason.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from random import Random
+from typing import Protocol, runtime_checkable
 
 from hypoarena.errors import (
     UnknownReferenceError,
@@ -21,6 +24,9 @@ from hypoarena.errors import (
 )
 from hypoarena.ids import (
     content_hash,
+)
+from hypoarena.schema import (
+    Claim,
 )
 
 RUBRIC_DIMENSIONS: tuple[str, ...] = (
@@ -415,3 +421,62 @@ class MatchResult:
             "match_index": self.match_index,
             "seed": self.seed,
         }
+
+
+DEFAULT_UNKNOWN_QUALITY = 0.5
+MAX_JUDGE_NOISE = 0.4
+
+
+@runtime_checkable
+class Judge(Protocol):
+    """Scores one claim on the rubric; may take the opponent into account."""
+
+    name: str
+
+    def score(self, claim: Claim, *, opponent: Claim | None = None) -> RubricScore: ...
+
+
+@dataclass(frozen=True)
+class PlantedJudge:
+    """Judge driven by a planted quality per claim identifier.
+
+    This is the oracle used by the order-recovery tests: qualities are chosen by
+    the test, and the judge adds deterministic per-pair noise so recovery is a
+    measured property rather than a tautology. With ``noise=0`` the stronger claim
+    always wins, which is the degenerate case used to check the update rule
+    itself.
+    """
+
+    qualities: Mapping[str, float]
+    noise: float = 0.0
+    seed: int = 0
+    name: str = "planted"
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.noise <= MAX_JUDGE_NOISE:
+            raise ValidationError(
+                "judge noise must lie within [0, 0.4]", noise=self.noise
+            )
+        for subject, quality in self.qualities.items():
+            if not 0.0 <= quality <= 1.0:
+                raise ValidationError(
+                    "planted quality must lie within [0, 1]",
+                    subject=subject,
+                    quality=quality,
+                )
+
+    def quality(self, claim: Claim) -> float:
+        """Return the planted quality of a claim (0.5 when it was not planted)."""
+        return float(self.qualities.get(claim.claim_id, DEFAULT_UNKNOWN_QUALITY))
+
+    def score(self, claim: Claim, *, opponent: Claim | None = None) -> RubricScore:
+        """Return rubric scores scattered deterministically around the quality."""
+        rng = Random(
+            f"{self.seed}:{claim.claim_id}:{opponent.claim_id if opponent else ''}"
+        )
+        base = self.quality(claim)
+        values = []
+        for _dimension in RUBRIC_DIMENSIONS:
+            offset = (rng.random() - 0.5) * 2 * self.noise
+            values.append(min(SCORE_MAXIMUM, max(SCORE_MINIMUM, base + offset)))
+        return RubricScore(*values)

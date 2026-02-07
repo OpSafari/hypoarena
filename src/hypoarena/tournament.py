@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from hypoarena.errors import (
+    UnknownReferenceError,
     ValidationError,
 )
 from hypoarena.ids import (
@@ -311,4 +312,106 @@ class Rating:
             "draws": self.draws,
             "win_rate": round(self.win_rate, 4),
             "score_points": self.score_points,
+        }
+
+
+@dataclass(frozen=True)
+class MatchResult:
+    """One judged comparison, kept as a complete audit record.
+
+    Totals are stored alongside the rubric scores so an auditor can recompute the
+    outcome without re-running the judge, and ``seed``/indices make the exact
+    position of the match inside a run recoverable.
+    """
+
+    left: str
+    right: str
+    left_score: RubricScore
+    right_score: RubricScore
+    left_total: float
+    right_total: float
+    outcome: float
+    judge: str
+    round_index: int = 0
+    match_index: int = 0
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("left", "right", "judge"):
+            if not getattr(self, name).strip():
+                raise ValidationError(f"match {name} must not be blank")
+        if self.left == self.right:
+            raise ValidationError(
+                "a match needs two different subjects", left=self.left
+            )
+        if self.outcome not in OUTCOMES:
+            raise ValidationError(
+                "outcome must be 0.0, 0.5 or 1.0",
+                outcome=self.outcome,
+                allowed=list(OUTCOMES),
+            )
+        for name in ("left_total", "right_total"):
+            value = getattr(self, name)
+            if not SCORE_MINIMUM <= value <= SCORE_MAXIMUM:
+                raise ValidationError(f"{name} must lie within [0, 1]", **{name: value})
+        for name in ("round_index", "match_index"):
+            if getattr(self, name) < 0:
+                raise ValidationError(
+                    f"{name} must be >= 0", **{name: getattr(self, name)}
+                )
+
+    @property
+    def winner(self) -> str | None:
+        """The winning subject, or ``None`` for a draw."""
+        if self.outcome == 0.5:
+            return None
+        return self.left if self.outcome == 1.0 else self.right
+
+    @property
+    def is_draw(self) -> bool:
+        """True when neither side won."""
+        return self.outcome == 0.5
+
+    @property
+    def margin(self) -> float:
+        """Signed difference of the weighted totals, from the left side's view."""
+        return self.left_total - self.right_total
+
+    def pair(self) -> tuple[str, str]:
+        """Return the two subjects in sorted order."""
+        return tuple(sorted((self.left, self.right)))  # type: ignore[return-value]
+
+    def total_for(self, subject: str) -> float:
+        """Return a subject's weighted total in this match."""
+        self._require_subject(subject)
+        return self.left_total if subject == self.left else self.right_total
+
+    def outcome_for(self, subject: str) -> float:
+        """Return the outcome from one subject's perspective."""
+        self._require_subject(subject)
+        if self.outcome == 0.5:
+            return 0.5
+        if subject == self.left:
+            return self.outcome
+        return 1.0 - self.outcome
+
+    def _require_subject(self, subject: str) -> None:
+        if subject not in (self.left, self.right):
+            raise UnknownReferenceError(subject, "match subject", owner=self.left)
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view of the whole audit record."""
+        return {
+            "left": self.left,
+            "right": self.right,
+            "left_score": self.left_score.as_dict(),
+            "right_score": self.right_score.as_dict(),
+            "left_total": round(self.left_total, 6),
+            "right_total": round(self.right_total, 6),
+            "outcome": self.outcome,
+            "winner": self.winner,
+            "judge": self.judge,
+            "round_index": self.round_index,
+            "match_index": self.match_index,
+            "seed": self.seed,
         }

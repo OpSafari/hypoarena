@@ -13,7 +13,7 @@ planted qualities on synthetic claims for exactly that reason.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from random import Random
 from typing import Protocol, runtime_checkable
@@ -575,3 +575,42 @@ def graph_contradiction_counts(graph: HypothesisGraph) -> dict[str, int]:
             counts[edge.source] = counts.get(edge.source, 0) + 1
             counts[edge.target] = counts.get(edge.target, 0) + 1
     return counts
+
+
+def round_robin_pairings(
+    subjects: Sequence[str], *, repeats: int = 1, seed: int = 0
+) -> tuple[tuple[str, str], ...]:
+    """Return a full round-robin schedule, repeated and shuffled deterministically.
+
+    Each pass over the pair list is one round; within a round the order is
+    shuffled with a generator seeded by ``(seed, round)`` so a run is
+    reproducible but not biased by identifier order. On odd-numbered repeats the
+    sides are swapped, which cancels any positional advantage a judge might have.
+    """
+    unique = sorted(set(subjects))
+    if len(unique) < 2:
+        raise ValidationError(
+            "a pairing schedule needs at least two subjects", count=len(unique)
+        )
+    if repeats < 1:
+        raise ValidationError("repeats must be >= 1", repeats=repeats)
+    pairs = [
+        (left, right)
+        for index, left in enumerate(unique)
+        for right in unique[index + 1 :]
+    ]
+    schedule: list[tuple[str, str]] = []
+    for round_index in range(repeats):
+        rng = Random(f"hypoarena:tournament:{seed}:{round_index}")
+        shuffled = list(pairs)
+        rng.shuffle(shuffled)
+        if round_index % 2 == 1:
+            shuffled = [(right, left) for left, right in shuffled]
+        schedule.extend(shuffled)
+    return tuple(schedule)
+
+
+def pair_count(subjects: Sequence[str]) -> int:
+    """Return how many matches one round contains."""
+    size = len(set(subjects))
+    return size * (size - 1) // 2

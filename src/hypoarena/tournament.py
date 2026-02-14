@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from itertools import permutations
 from random import Random
 from typing import Protocol, runtime_checkable
 
@@ -769,3 +770,161 @@ class Tournament:
             matches=tuple(matches),
             config=self.config,
         )
+
+
+def kendall_tau(expected: Sequence[str], actual: Sequence[str]) -> float:
+    """Return Kendall's tau between two orderings of the same subject set.
+
+    ``1.0`` means identical order, ``-1.0`` the reverse and ``0.0`` no agreement.
+    Both sequences must contain exactly the same subjects, otherwise the
+    comparison is meaningless and a validation error is raised.
+    """
+    if sorted(expected) != sorted(actual):
+        raise ValidationError(
+            "orderings must cover the same subjects",
+            expected=len(expected),
+            actual=len(actual),
+        )
+    if len(expected) < 2:
+        return 1.0
+    positions = {subject: index for index, subject in enumerate(expected)}
+    concordant = 0
+    discordant = 0
+    for index, first in enumerate(actual):
+        for second in actual[index + 1 :]:
+            if positions[first] < positions[second]:
+                concordant += 1
+            else:
+                discordant += 1
+    total = concordant + discordant
+    return (concordant - discordant) / total if total else 1.0
+
+
+def order_recovery(expected: Sequence[str], actual: Sequence[str]) -> float:
+    """Return Kendall's tau rescaled to ``[0, 1]`` for reporting."""
+    return (kendall_tau(expected, actual) + 1.0) / 2.0
+
+
+def prefix_agreement(expected: Sequence[str], actual: Sequence[str], top: int) -> float:
+    """Return the overlap of the two top-``top`` sets, within ``[0, 1]``."""
+    if top < 1:
+        raise ValidationError("top must be >= 1", top=top)
+    size = min(top, len(expected), len(actual))
+    if size == 0:
+        return 1.0
+    shared = set(expected[:size]) & set(actual[:size])
+    return len(shared) / size
+
+
+def transitivity_rate(matches: Sequence[MatchResult]) -> float:
+    """Return the fraction of decided chains that are transitive.
+
+    For every ordered triple where ``a`` beat ``b`` and ``b`` beat ``c`` and the
+    ``a``/``c`` pair was also decided, the chain counts as transitive when ``a``
+    beat ``c``. Draws are ignored, and a tournament without any decided chain
+    scores ``1.0``.
+    """
+    beats: dict[str, set[str]] = {}
+    decided: set[frozenset[str]] = set()
+    for match in matches:
+        if match.winner is None:
+            continue
+        loser = match.right if match.winner == match.left else match.left
+        beats.setdefault(match.winner, set()).add(loser)
+        decided.add(frozenset(match.pair()))
+    subjects = sorted({subject for pair in decided for subject in pair})
+    consistent = 0
+    total = 0
+    for first, second, third in permutations(subjects, 3):
+        if second not in beats.get(first, set()):
+            continue
+        if third not in beats.get(second, set()):
+            continue
+        if frozenset((first, third)) not in decided:
+            continue
+        total += 1
+        if third in beats.get(first, set()):
+            consistent += 1
+    return consistent / total if total else 1.0
+
+
+def replay_ratings(
+    matches: Sequence[MatchResult], model: EloModel | None = None
+) -> tuple[Rating, ...]:
+    """Recompute final ratings from an audit trail alone.
+
+    A tournament's match list is a complete record: replaying it must reproduce
+    the published standings exactly, which is the property that makes the audit
+    trail worth storing.
+    """
+    active = model or EloModel()
+    ratings: dict[str, Rating] = {}
+    for match in matches:
+        for subject in match.pair():
+            ratings.setdefault(subject, Rating(subject, active.initial))
+        left = ratings[match.left]
+        right = ratings[match.right]
+        left_elo, right_elo = active.update(
+            left.elo,
+            right.elo,
+            match.outcome,
+            left_played=left.played,
+            right_played=right.played,
+        )
+        ratings[match.left] = left.advanced(match.outcome, left_elo)
+        ratings[match.right] = right.advanced(match.outcome_for(match.right), right_elo)
+    return tuple(
+        sorted(ratings.values(), key=lambda rating: (-rating.elo, rating.subject))
+    )
+
+
+def step_sizes(
+    matches: Sequence[MatchResult], model: EloModel | None = None
+) -> tuple[float, ...]:
+    """Return the mean absolute rating movement caused by each match."""
+    active = model or EloModel()
+    ratings: dict[str, Rating] = {}
+    sizes: list[float] = []
+    for match in matches:
+        for subject in match.pair():
+            ratings.setdefault(subject, Rating(subject, active.initial))
+        left = ratings[match.left]
+        right = ratings[match.right]
+        left_elo, right_elo = active.update(
+            left.elo,
+            right.elo,
+            match.outcome,
+            left_played=left.played,
+            right_played=right.played,
+        )
+        sizes.append((abs(left_elo - left.elo) + abs(right_elo - right.elo)) / 2)
+        ratings[match.left] = left.advanced(match.outcome, left_elo)
+        ratings[match.right] = right.advanced(match.outcome_for(match.right), right_elo)
+    return tuple(sizes)
+
+
+def convergence_ratio(
+    matches: Sequence[MatchResult], model: EloModel | None = None
+) -> float:
+    """Return late-match movement divided by early-match movement.
+
+    Values below one mean the tournament is settling: with a decaying K factor
+    the second half of the schedule moves ratings less than the first half. At
+    least four matches are needed for the comparison to mean anything.
+    """
+    sizes = step_sizes(matches, model)
+    if len(sizes) < 4:
+        raise ValidationError(
+            "convergence needs at least four matches", count=len(sizes)
+        )
+    half = len(sizes) // 2
+    early = sum(sizes[:half]) / half
+    late = sum(sizes[half:]) / (len(sizes) - half)
+    return late / early if early else 0.0
+
+
+def rating_spread(result: TournamentResult) -> float:
+    """Return the gap between the best and worst rating."""
+    if not result.ratings:
+        return 0.0
+    return result.ratings[0].elo - result.ratings[-1].elo

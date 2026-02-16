@@ -14,7 +14,10 @@ missed) around the ``threshold ≈ (1 / bands) ** (1 / rows)`` inflection.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
+
+import numpy as np
 
 from hypoarena.errors import (
     ValidationError,
@@ -111,3 +114,115 @@ def similarity_matrix(
                 row.append(len(first & second) / len(first | second))
         matrix.append(row)
     return matrix
+
+
+def term_counts(text: str, ngram_size: int) -> dict[str, int]:
+    """Count word n-grams (or single tokens when ``ngram_size`` is 1)."""
+    if ngram_size < 1:
+        raise ValidationError("ngram_size must be >= 1", ngram_size=ngram_size)
+    terms = (
+        tokenize(text) if ngram_size == 1 else word_ngrams(tokenize(text), ngram_size)
+    )
+    counts: dict[str, int] = {}
+    for term in terms:
+        counts[term] = counts.get(term, 0) + 1
+    return counts
+
+
+class TfidfVectorizer:
+    """Term frequency / inverse document frequency vectors over word n-grams.
+
+    ``idf`` uses the smoothed form ``log((1 + n_docs) / (1 + df)) + 1`` so a term
+    present in every document still contributes (with weight 1) instead of
+    vanishing. Rows are L2-normalized, which turns a dot product into a cosine
+    similarity. ``min_document_frequency`` drops rare terms, the usual defence
+    against identifiers and typos dominating the vocabulary.
+    """
+
+    def __init__(self, ngram_size: int = 1, min_document_frequency: int = 1) -> None:
+        if ngram_size < 1:
+            raise ValidationError("ngram_size must be >= 1", ngram_size=ngram_size)
+        if min_document_frequency < 1:
+            raise ValidationError(
+                "min_document_frequency must be >= 1",
+                min_document_frequency=min_document_frequency,
+            )
+        self.ngram_size = ngram_size
+        self.min_document_frequency = min_document_frequency
+        self.vocabulary_: tuple[str, ...] = ()
+        self.idf_: np.ndarray = np.zeros(0, dtype=np.float64)
+        self.fitted_ = False
+
+    def fit(self, documents: Sequence[str]) -> TfidfVectorizer:
+        """Learn the vocabulary and inverse document frequencies."""
+        frequencies: dict[str, int] = {}
+        for document in documents:
+            for term in set(term_counts(document, self.ngram_size)):
+                frequencies[term] = frequencies.get(term, 0) + 1
+        kept = sorted(
+            term
+            for term, count in frequencies.items()
+            if count >= self.min_document_frequency
+        )
+        total = len(documents)
+        self.vocabulary_ = tuple(kept)
+        self.idf_ = np.array(
+            [
+                math.log((1 + total) / (1 + frequencies[term])) + 1.0
+                for term in self.vocabulary_
+            ],
+            dtype=np.float64,
+        )
+        self.fitted_ = True
+        return self
+
+    def transform(self, documents: Sequence[str]) -> np.ndarray:
+        """Return L2-normalized TF-IDF rows for ``documents``."""
+        if not self.fitted_:
+            raise ValidationError("vectorizer must be fitted before transforming")
+        index = {term: position for position, term in enumerate(self.vocabulary_)}
+        matrix = np.zeros((len(documents), len(self.vocabulary_)), dtype=np.float64)
+        for row, document in enumerate(documents):
+            for term, count in term_counts(document, self.ngram_size).items():
+                position = index.get(term)
+                if position is not None:
+                    matrix[row, position] = count * self.idf_[position]
+        return l2_normalize(matrix)
+
+    def fit_transform(self, documents: Sequence[str]) -> np.ndarray:
+        """Fit on ``documents`` and return their vectors."""
+        return self.fit(documents).transform(documents)
+
+
+def l2_normalize(matrix: np.ndarray) -> np.ndarray:
+    """Scale each row to unit length, leaving zero rows untouched."""
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    safe = np.where(norms == 0.0, 1.0, norms)
+    return matrix / safe
+
+
+def cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    """Return the cosine of two equally shaped vectors.
+
+    Two zero vectors score ``1.0`` and a zero vector against a non-zero one
+    scores ``0.0``, matching the convention used by :func:`jaccard_similarity`.
+    """
+    if left.shape != right.shape:
+        raise ValidationError(
+            "cosine needs equally shaped vectors",
+            left=list(left.shape),
+            right=list(right.shape),
+        )
+    left_norm = float(np.linalg.norm(left))
+    right_norm = float(np.linalg.norm(right))
+    if left_norm == 0.0 and right_norm == 0.0:
+        return 1.0
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return float(np.dot(left, right) / (left_norm * right_norm))
+
+
+def cosine_matrix(vectors: np.ndarray) -> np.ndarray:
+    """Return the pairwise cosine matrix of L2-normalized rows."""
+    normalized = l2_normalize(vectors)
+    return normalized @ normalized.T

@@ -226,3 +226,70 @@ def cosine_matrix(vectors: np.ndarray) -> np.ndarray:
     """Return the pairwise cosine matrix of L2-normalized rows."""
     normalized = l2_normalize(vectors)
     return normalized @ normalized.T
+
+
+EMPTY_SIGNATURE_VALUE = 0
+MAX_HASH = (1 << 61) - 1
+
+
+def hash_shingle(shingle: str, permutation: int) -> int:
+    """Return a deterministic 61-bit hash of one shingle under one permutation."""
+    if permutation < 0:
+        raise ValidationError("permutation index must be >= 0", permutation=permutation)
+    return int(content_hash([permutation, shingle], length=16), 16) % MAX_HASH
+
+
+def minhash_signature(
+    shingle_set: frozenset[str], num_perm: int, *, seed: int = 0
+) -> tuple[int, ...]:
+    """Return the MinHash signature of a shingle set.
+
+    Slot ``i`` holds the smallest hash of any shingle under permutation ``i``;
+    the seed shifts the permutation family so independent runs can be compared.
+    An empty set yields a signature of zeros, and two empty signatures compare
+    equal — the same convention the exact similarities use.
+    """
+    if num_perm < 1:
+        raise ValidationError("num_perm must be >= 1", num_perm=num_perm)
+    if not shingle_set:
+        return tuple([EMPTY_SIGNATURE_VALUE] * num_perm)
+    return tuple(
+        min(hash_shingle(shingle, seed * 4096 + index) for shingle in shingle_set)
+        for index in range(num_perm)
+    )
+
+
+def text_signature(
+    text: str, num_perm: int, *, n: int = 3, words: bool = False, seed: int = 0
+) -> tuple[int, ...]:
+    """Return the MinHash signature of a text's shingles."""
+    return minhash_signature(shingles(text, n, words=words), num_perm, seed=seed)
+
+
+def minhash_similarity(left: Sequence[int], right: Sequence[int]) -> float:
+    """Return the fraction of agreeing slots, an estimate of Jaccard similarity."""
+    if len(left) != len(right):
+        raise ValidationError(
+            "signatures must have the same length",
+            left=len(left),
+            right=len(right),
+        )
+    if not left:
+        raise ValidationError("signatures must not be empty")
+    agreeing = sum(
+        1 for first, second in zip(left, right, strict=True) if first == second
+    )
+    return agreeing / len(left)
+
+
+def signature_standard_error(num_perm: int) -> float:
+    """Return the standard error of a MinHash estimate: ``1 / sqrt(num_perm)``.
+
+    With 64 permutations the estimate is typically within about 0.125 of the true
+    Jaccard index (one standard error); 256 permutations tighten that to 0.0625.
+    Callers comparing near a threshold should size ``num_perm`` from this bound
+    rather than guessing.
+    """
+    if num_perm < 1:
+        raise ValidationError("num_perm must be >= 1", num_perm=num_perm)
+    return 1.0 / math.sqrt(num_perm)

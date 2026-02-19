@@ -15,7 +15,8 @@ missed) around the ``threshold ≈ (1 / bands) ** (1 / rows)`` inflection.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 
 import numpy as np
 
@@ -366,3 +367,204 @@ def lsh_inflection(num_perm: int, bands: int) -> float:
     """
     rows = lsh_rows(num_perm, bands)
     return (1.0 / bands) ** (1.0 / rows)
+
+
+DEDUP_METHODS = ("exact", "jaccard", "tfidf", "minhash")
+DEFAULT_NUM_PERM = 128
+DEFAULT_BANDS = 32
+DEFAULT_THRESHOLD = 0.8
+
+
+@dataclass(frozen=True)
+class DedupConfig:
+    """Which similarity metric to use and how aggressively to cluster.
+
+    ``threshold`` is the verified similarity a pair must reach to be merged. For
+    the ``minhash`` method, ``bands`` controls the LSH filter: a higher band
+    count proposes more candidates (fewer false negatives, more verification
+    work) and :func:`lsh_inflection` gives the similarity the configuration
+    approximates.
+    """
+
+    method: str = "minhash"
+    threshold: float = DEFAULT_THRESHOLD
+    ngram_size: int = 3
+    word_ngram_size: int = 1
+    num_perm: int = DEFAULT_NUM_PERM
+    bands: int = DEFAULT_BANDS
+    min_document_frequency: int = 1
+    use_lsh: bool = True
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.method not in DEDUP_METHODS:
+            raise ValidationError(
+                "unknown dedup method", method=self.method, allowed=list(DEDUP_METHODS)
+            )
+        if not 0.0 < self.threshold <= 1.0:
+            raise ValidationError(
+                "threshold must lie within (0, 1]", threshold=self.threshold
+            )
+        for name in ("ngram_size", "word_ngram_size", "num_perm", "bands"):
+            if getattr(self, name) < 1:
+                raise ValidationError(
+                    f"{name} must be >= 1", **{name: getattr(self, name)}
+                )
+        if self.min_document_frequency < 1:
+            raise ValidationError(
+                "min_document_frequency must be >= 1",
+                min_document_frequency=self.min_document_frequency,
+            )
+        if self.use_lsh and self.num_perm % self.bands:
+            raise ValidationError(
+                "num_perm must be divisible by bands when LSH is used",
+                num_perm=self.num_perm,
+                bands=self.bands,
+            )
+
+    @property
+    def rows(self) -> int:
+        """Rows per LSH band for this configuration."""
+        return lsh_rows(self.num_perm, self.bands)
+
+    def inflection(self) -> float:
+        """Return the similarity this banding approximates."""
+        return lsh_inflection(self.num_perm, self.bands)
+
+    def fingerprint(self) -> str:
+        """Return a digest of the configuration for run metadata."""
+        return content_hash(asdict(self))
+
+
+@dataclass(frozen=True)
+class DuplicateCluster:
+    """A set of identifiers judged to restate the same content."""
+
+    members: tuple[str, ...]
+    representative: str
+    method: str
+    similarities: tuple[tuple[str, str, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(self.members) < 2:
+            raise ValidationError(
+                "a duplicate cluster needs at least two members",
+                count=len(self.members),
+            )
+        if list(self.members) != sorted(set(self.members)):
+            raise ValidationError(
+                "cluster members must be sorted and unique", members=list(self.members)
+            )
+        if self.representative not in self.members:
+            raise ValidationError(
+                "cluster representative must be a member",
+                representative=self.representative,
+            )
+
+    @property
+    def size(self) -> int:
+        """Number of members."""
+        return len(self.members)
+
+    def contains(self, identifier: str) -> bool:
+        """True when an identifier belongs to this cluster."""
+        return identifier in self.members
+
+    def pairs(self) -> tuple[tuple[str, str], ...]:
+        """Return every unordered member pair, sorted."""
+        return tuple(
+            (first, second)
+            for index, first in enumerate(self.members)
+            for second in self.members[index + 1 :]
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready view used by reports and artifacts."""
+        return {
+            "representative": self.representative,
+            "method": self.method,
+            "size": self.size,
+            "members": list(self.members),
+            "similarities": [
+                {"left": left, "right": right, "score": round(score, 6)}
+                for left, right, score in self.similarities
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class ClusterMetrics:
+    """Pair-based precision and recall of a clustering against planted truth."""
+
+    clusters: int
+    members: int
+    pairs_found: int
+    pairs_expected: int
+    true_positives: int
+    false_positives: int
+    false_negatives: int
+
+    @property
+    def precision(self) -> float:
+        """Fraction of discovered pairs that really are duplicates."""
+        if not self.pairs_found:
+            return 1.0
+        return self.true_positives / self.pairs_found
+
+    @property
+    def recall(self) -> float:
+        """Fraction of planted pairs that were discovered."""
+        if not self.pairs_expected:
+            return 1.0
+        return self.true_positives / self.pairs_expected
+
+    @property
+    def f1(self) -> float:
+        """Harmonic mean of precision and recall."""
+        precision, recall = self.precision, self.recall
+        if precision + recall == 0:
+            return 0.0
+        return 2 * precision * recall / (precision + recall)
+
+    def as_dict(self) -> dict[str, float]:
+        """Return a JSON-ready view for reports."""
+        return {
+            "clusters": self.clusters,
+            "members": self.members,
+            "pairs_found": self.pairs_found,
+            "pairs_expected": self.pairs_expected,
+            "true_positives": self.true_positives,
+            "false_positives": self.false_positives,
+            "false_negatives": self.false_negatives,
+            "precision": round(self.precision, 4),
+            "recall": round(self.recall, 4),
+            "f1": round(self.f1, 4),
+        }
+
+
+def cluster_metrics(
+    clusters: Sequence[DuplicateCluster], truth: Sequence[Iterable[str]]
+) -> ClusterMetrics:
+    """Score a clustering against planted groups, counting identifier pairs.
+
+    Pair counting is used instead of cluster counting because a run that splits
+    one planted group in two and another that merges two groups are different
+    failures, and only the pair view distinguishes them.
+    """
+    found = {pair for cluster in clusters for pair in cluster.pairs()}
+    expected: set[tuple[str, str]] = set()
+    for group in truth:
+        members = tuple(sorted(set(group)))
+        for index, first in enumerate(members):
+            for second in members[index + 1 :]:
+                expected.add((first, second))
+    true_positives = len(found & expected)
+    return ClusterMetrics(
+        clusters=len(clusters),
+        members=sum(cluster.size for cluster in clusters),
+        pairs_found=len(found),
+        pairs_expected=len(expected),
+        true_positives=true_positives,
+        false_positives=len(found - expected),
+        false_negatives=len(expected - found),
+    )

@@ -29,6 +29,7 @@ from hypoarena.ids import (
 )
 from hypoarena.text import (
     char_ngrams,
+    content_tokens,
     normalize,
     tokenize,
     word_ngrams,
@@ -83,15 +84,20 @@ def shingles(text: str, n: int, *, words: bool = False) -> frozenset[str]:
 
 
 def jaccard_similarity(
-    left: str, right: str, *, n: int = 3, words: bool = False
+    left: str,
+    right: str,
+    *,
+    n: int = 3,
+    words: bool = False,
+    content_only: bool = False,
 ) -> float:
     """Return the Jaccard index of two texts' shingle sets.
 
     Two empty texts score ``1.0`` (they are the same nothing); an empty text
     against a non-empty one scores ``0.0``.
     """
-    first = shingles(left, n, words=words)
-    second = shingles(right, n, words=words)
+    first = shingle_set(left, n, words=words, content_only=content_only)
+    second = shingle_set(right, n, words=words, content_only=content_only)
     if not first and not second:
         return 1.0
     if not first or not second:
@@ -262,10 +268,20 @@ def minhash_signature(
 
 
 def text_signature(
-    text: str, num_perm: int, *, n: int = 3, words: bool = False, seed: int = 0
+    text: str,
+    num_perm: int,
+    *,
+    n: int = 3,
+    words: bool = False,
+    content_only: bool = False,
+    seed: int = 0,
 ) -> tuple[int, ...]:
     """Return the MinHash signature of a text's shingles."""
-    return minhash_signature(shingles(text, n, words=words), num_perm, seed=seed)
+    return minhash_signature(
+        shingle_set(text, n, words=words, content_only=content_only),
+        num_perm,
+        seed=seed,
+    )
 
 
 def minhash_similarity(left: Sequence[int], right: Sequence[int]) -> float:
@@ -396,6 +412,7 @@ class DedupConfig:
     min_document_frequency: int = 1
     use_lsh: bool = True
     shingle_unit: str = "char"
+    content_only: bool = False
     seed: int = 0
 
     def __post_init__(self) -> None:
@@ -676,6 +693,7 @@ class DuplicateFinder:
                 self.config.num_perm,
                 n=self.config.ngram_size,
                 words=self.config.uses_words,
+                content_only=self.config.content_only,
                 seed=self.config.seed,
             )
             for identifier in identifiers
@@ -695,6 +713,7 @@ class DuplicateFinder:
                     texts[right],
                     n=self.config.ngram_size,
                     words=self.config.uses_words,
+                    content_only=self.config.content_only,
                 )
                 if score >= self.config.threshold:
                     verified.add((left, right))
@@ -706,6 +725,7 @@ class DuplicateFinder:
                 self.config.num_perm,
                 n=self.config.ngram_size,
                 words=self.config.uses_words,
+                content_only=self.config.content_only,
                 seed=self.config.seed,
             )
             for identifier in identifiers
@@ -819,6 +839,7 @@ class NoveltyGuard:
                 right,
                 n=self.config.ngram_size,
                 words=self.config.uses_words,
+                content_only=self.config.content_only,
             )
         if method == "tfidf":
             vectorizer = TfidfVectorizer(ngram_size=self.config.word_ngram_size)
@@ -830,6 +851,7 @@ class NoveltyGuard:
                 self.config.num_perm,
                 n=self.config.ngram_size,
                 words=self.config.uses_words,
+                content_only=self.config.content_only,
                 seed=self.config.seed,
             ),
             text_signature(
@@ -837,9 +859,34 @@ class NoveltyGuard:
                 self.config.num_perm,
                 n=self.config.ngram_size,
                 words=self.config.uses_words,
+                content_only=self.config.content_only,
                 seed=self.config.seed,
             ),
         )
 
 
 SHINGLE_UNITS = ("char", "word")
+
+
+def content_shingles(text: str, n: int, *, words: bool = True) -> frozenset[str]:
+    """Return shingles built from content tokens only.
+
+    Function and reporting words are dropped first, so two findings that state
+    the same relation with different framing ("we observed that ...", "assays
+    show that ...") produce nearly the same shingle set. This is the mode that
+    makes paraphrase clusters separable; plain shingles keep every token and are
+    the better choice when surface form matters (near-identical text detection).
+    """
+    tokens = content_tokens(text)
+    if words:
+        return frozenset(word_ngrams(tokens, n))
+    return frozenset(char_ngrams(" ".join(tokens), n))
+
+
+def shingle_set(
+    text: str, n: int, *, words: bool = False, content_only: bool = False
+) -> frozenset[str]:
+    """Return the shingle set for one text under the given options."""
+    if content_only:
+        return content_shingles(text, n, words=words)
+    return shingles(text, n, words=words)

@@ -37,7 +37,8 @@ TOKENIZE_GOLDEN = [
 
 CONTENT_TOKENS_GOLDEN = [
     ("the protein binds to the receptor", ["protein", "binds", "receptor"]),
-    ("we do not observe any effect", ["observe", "effect"]),
+    # reporting verbs are stopwords, so only the entity survives
+    ("we do not observe any effect", ["effect"]),
 ]
 
 NUMBER_GOLDEN = [

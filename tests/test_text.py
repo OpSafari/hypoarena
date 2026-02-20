@@ -97,6 +97,11 @@ def test_content_tokens_drops_stopwords_but_keeps_order() -> None:
         "binds",
         "receptor",
     ]
+    assert content_tokens("the kinase binds the promoter") == [
+        "kinase",
+        "binds",
+        "promoter",
+    ]
 
 
 def test_content_tokens_keeps_every_token_when_there_are_no_stopwords() -> None:

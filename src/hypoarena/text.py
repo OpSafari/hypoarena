@@ -341,3 +341,39 @@ def jaccard(left: set[str], right: set[str]) -> float:
         return 1.0
     union = left | right
     return len(left & right) / len(union)
+
+
+REPORTING_WORDS = frozenset(
+    {
+        "assay",
+        "assays",
+        "consistent",
+        "data",
+        "evidence",
+        "find",
+        "finds",
+        "found",
+        "indicate",
+        "indicates",
+        "measurement",
+        "measurements",
+        "observe",
+        "observed",
+        "observes",
+        "report",
+        "reported",
+        "reports",
+        "result",
+        "results",
+        "show",
+        "showed",
+        "shows",
+        "significant",
+        "significantly",
+        "suggest",
+        "suggests",
+    }
+)
+# Reporting verbs are merged into the function-word list: they say how a finding
+# was communicated, not what it claims, so they must not drive similarity.
+STOPWORDS = STOPWORDS | REPORTING_WORDS

@@ -638,6 +638,10 @@ class DuplicateFinder:
     def __init__(self, config: DedupConfig | None = None) -> None:
         self.config = config or DedupConfig()
 
+    def report(self, texts: Mapping[str, str]) -> DedupReport:
+        """Run :meth:`find` and bundle the outcome with this configuration."""
+        return DedupReport(self.find(texts), self.config, len(texts))
+
     def find(self, texts: Mapping[str, str]) -> tuple[DuplicateCluster, ...]:
         """Return duplicate clusters, sorted by representative."""
         identifiers = sorted(texts)
@@ -890,3 +894,75 @@ def shingle_set(
     if content_only:
         return content_shingles(text, n, words=words)
     return shingles(text, n, words=words)
+
+
+@dataclass(frozen=True)
+class DedupReport:
+    """The outcome of one deduplication pass, with the configuration used."""
+
+    clusters: tuple[DuplicateCluster, ...]
+    config: DedupConfig
+    total: int
+
+    def __post_init__(self) -> None:
+        if self.total < 0:
+            raise ValidationError("total must be >= 0", total=self.total)
+        seen: set[str] = set()
+        for cluster in self.clusters:
+            overlap = seen & set(cluster.members)
+            if overlap:
+                raise ValidationError(
+                    "a text appears in more than one cluster",
+                    members=sorted(overlap),
+                )
+            seen.update(cluster.members)
+
+    @property
+    def duplicated(self) -> int:
+        """How many texts belong to some cluster."""
+        return sum(cluster.size for cluster in self.clusters)
+
+    @property
+    def duplicate_rate(self) -> float:
+        """Fraction of examined texts that were grouped as duplicates."""
+        return self.duplicated / self.total if self.total else 0.0
+
+    def duplicate_ids(self) -> tuple[str, ...]:
+        """Return every identifier that belongs to a cluster, sorted."""
+        return tuple(
+            sorted(member for cluster in self.clusters for member in cluster.members)
+        )
+
+    def cluster_of(self, identifier: str) -> DuplicateCluster | None:
+        """Return the cluster containing an identifier, if any."""
+        for cluster in self.clusters:
+            if cluster.contains(identifier):
+                return cluster
+        return None
+
+    def metrics_against(self, truth: Sequence[Iterable[str]]) -> ClusterMetrics:
+        """Score this pass against planted clusters."""
+        return cluster_metrics(self.clusters, truth)
+
+    def signature(self) -> str:
+        """Return a digest over the clusters and the configuration."""
+        return content_hash(
+            {
+                "config": self.config.fingerprint(),
+                "total": self.total,
+                "clusters": [cluster.as_dict() for cluster in self.clusters],
+            }
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready summary for reports and run metadata."""
+        return {
+            "total": self.total,
+            "clusters": len(self.clusters),
+            "duplicated": self.duplicated,
+            "duplicate_rate": round(self.duplicate_rate, 4),
+            "method": self.config.method,
+            "threshold": self.config.threshold,
+            "config_fingerprint": self.config.fingerprint(),
+            "signature": self.signature(),
+        }

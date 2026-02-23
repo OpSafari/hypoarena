@@ -14,7 +14,7 @@ the engine re-validates the graph after inserting a child. The property tests in
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from hypoarena.errors import (
     ValidationError,
@@ -130,3 +130,34 @@ class Rejection:
             "nearest": self.nearest,
             "similarity": round(self.similarity, 6),
         }
+
+
+def narrow_scope(claim: Claim, condition: str, *, seed: int | None = None) -> Claim:
+    """Return a child claim restricted by an additional scope condition.
+
+    Narrowing is the safest way to make a hypothesis more testable: the child
+    says strictly less, so it cannot contradict its parent. Citations are
+    inherited unchanged — the child still rests on the same evidence, which is
+    exactly why the grounding verifier should be re-run after evolving.
+
+    Narrowing by a condition the claim already carries is a no-op and returns the
+    parent unchanged, so repeated application cannot pile up redundant children.
+    """
+    scope = claim.scope.narrowed(condition)
+    if scope is claim.scope:
+        return claim
+    statement = f"{claim.statement} under {condition}"
+    child = replace(
+        claim,
+        claim_id=evolved_claim_id(
+            "narrow_scope", (claim.claim_id,), statement, extra=condition
+        ),
+        statement=statement,
+        scope=scope,
+        provenance=evolved_provenance("narrow_scope", [claim], seed=seed),
+    )
+    if not child.scope.is_narrower_than(claim.scope):
+        raise ValidationError(  # pragma: no cover - defensive invariant
+            "narrowing did not produce a stricter scope", claim_id=claim.claim_id
+        )
+    return child

@@ -25,6 +25,8 @@ from hypoarena.ids import (
 from hypoarena.schema import (
     Claim,
     Provenance,
+    canonical_verb,
+    opposite_relation,
 )
 from hypoarena.text import (
     normalize,
@@ -207,4 +209,41 @@ def substitute_variable(
         statement=statement,
         provenance=evolved_provenance("substitute_variable", [claim], seed=seed),
         **{slot: replacement},
+    )
+
+
+def flip_relation(claim: Claim, *, seed: int | None = None) -> Claim | None:
+    """Return a child asserting the opposite relation, or ``None``.
+
+    ``causes`` and ``associates`` have no opposite in this schema, so flipping
+    them is refused rather than approximated: inventing a negation of a causal
+    claim would produce a child the graph cannot relate to its parent.
+    """
+    opposite = opposite_relation(claim.relation)
+    if opposite is None:
+        return None
+    original_verb = canonical_verb(claim.relation)
+    statement = claim.statement
+    lowered = statement.lower()
+    if original_verb in lowered:
+        start = lowered.index(original_verb)
+        replacement = canonical_verb(opposite)
+        if original_verb[:1].isupper():
+            replacement = replacement[:1].upper() + replacement[1:]
+        statement = (
+            statement[:start] + replacement + statement[start + len(original_verb) :]
+        )
+    else:
+        statement = f"{claim.subject} {canonical_verb(opposite)} {claim.object}"
+    return replace(
+        claim,
+        claim_id=evolved_claim_id(
+            "flip_relation",
+            (claim.claim_id,),
+            statement,
+            extra=opposite.value,
+        ),
+        statement=statement,
+        relation=opposite,
+        provenance=evolved_provenance("flip_relation", [claim], seed=seed),
     )

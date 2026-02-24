@@ -474,3 +474,30 @@ class Evidence:
         if self.polarity is EvidencePolarity.REFUTE:
             return -self.strength
         return 0.0
+
+
+CANONICAL_RELATION_VERBS: dict[PredictedRelation, str] = {
+    PredictedRelation.INCREASES: "increases",
+    PredictedRelation.DECREASES: "decreases",
+    PredictedRelation.ENABLES: "enables",
+    PredictedRelation.INHIBITS: "inhibits",
+    PredictedRelation.CAUSES: "causes",
+    PredictedRelation.ASSOCIATES: "is associated with",
+}
+
+
+def canonical_verb(relation: PredictedRelation) -> str:
+    """Return the deterministic surface verb for a relation.
+
+    Living in the schema (rather than in the corpus generator) matters: evolution
+    operators need the same verb table when they rewrite a statement, and a
+    second copy would be free to drift.
+    """
+    return CANONICAL_RELATION_VERBS[relation]
+
+
+def canonical_statement(subject: str, relation: PredictedRelation, target: str) -> str:
+    """Return the canonical statement for a subject/relation/target triple."""
+    if not subject.strip() or not target.strip():
+        raise ValidationError("canonical statement needs non-blank variables")
+    return f"{subject} {canonical_verb(relation)} {target}"

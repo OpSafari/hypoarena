@@ -41,6 +41,8 @@ from hypoarena.schema import (
     PredictedRelation,
     Provenance,
     Scope,
+    canonical_statement,
+    canonical_verb,
 )
 from hypoarena.text import (
     content_tokens,
@@ -130,12 +132,25 @@ def draw_entities(rng: Random, pool: str, count: int) -> tuple[str, ...]:
 
 def verb_for(rng: Random, relation: PredictedRelation) -> str:
     """Return a surface verb for a relation, chosen with ``rng``."""
-    return rng.choice(RELATION_VERBS[relation])
+    return rng.choice(relation_verbs(relation))
 
 
-def canonical_verb(relation: PredictedRelation) -> str:
-    """Return the deterministic verb used for canonical statements."""
-    return RELATION_VERBS[relation][0]
+def relation_verbs(relation: PredictedRelation) -> tuple[str, ...]:
+    """Return the surface verbs for a relation, canonical form first.
+
+    The check keeps the synthetic vocabulary honest: if a table entry drifted
+    away from the schema's canonical verb, planted statements and rendered
+    findings would disagree about the same relation.
+    """
+    verbs = RELATION_VERBS[relation]
+    if verbs[0] != canonical_verb(relation):
+        raise ValidationError(
+            "surface verbs disagree with the canonical verb",
+            relation=relation.value,
+            canonical=canonical_verb(relation),
+            surface=verbs[0],
+        )
+    return verbs
 
 
 FINDING_TEMPLATES: tuple[str, ...] = (
@@ -221,11 +236,6 @@ def render_negation(rng: Random, subject: str, target: str, system: str) -> str:
     return render(
         rng.choice(NEGATION_TEMPLATES), subject=subject, target=target, system=system
     )
-
-
-def canonical_statement(subject: str, relation: PredictedRelation, target: str) -> str:
-    """Return the deterministic statement used for planted ground truth."""
-    return f"{subject} {canonical_verb(relation)} {target}"
 
 
 MIN_CHAIN_LENGTH = 2

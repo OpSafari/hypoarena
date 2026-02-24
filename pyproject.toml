@@ -85,7 +85,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["SIM108"]
 
 [tool.ruff.lint.per-file-ignores]
-"examples/*" = ["E501"]
+"examples/**" = ["E501"]
 "tests/test_golden_*.py" = ["E501"]
 
 [tool.mypy]

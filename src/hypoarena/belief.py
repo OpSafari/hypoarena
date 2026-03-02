@@ -14,8 +14,17 @@ statistical model of any real experimental system.
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+
 from hypoarena.errors import (
     ValidationError,
+)
+from hypoarena.ids import (
+    content_hash,
+)
+from hypoarena.schema import (
+    Evidence,
+    EvidencePolarity,
 )
 
 MIN_PROBABILITY = 1e-9
@@ -54,3 +63,47 @@ def from_odds(odds: float) -> float:
 def clamp_probability(probability: float) -> float:
     """Keep a probability strictly inside the open interval ``(0, 1)``."""
     return min(MAX_PROBABILITY, max(MIN_PROBABILITY, probability))
+
+
+DEFAULT_SUPPORT_RATIO = 3.0
+DEFAULT_REFUTE_RATIO = 3.0
+
+
+@dataclass(frozen=True)
+class LikelihoodModel:
+    """Turns graded evidence into likelihood ratios.
+
+    A supporting item of strength ``s`` multiplies the odds by
+    ``support_ratio ** s``; a refuting item divides by ``refute_ratio ** s``;
+    neutral evidence multiplies by ``neutral_ratio`` (1.0 by default, i.e. no
+    effect). Strength interpolation is exponential so that half-strength evidence
+    moves the belief by the square root of a full-strength step — a documented
+    convention, not a measured calibration.
+    """
+
+    support_ratio: float = DEFAULT_SUPPORT_RATIO
+    refute_ratio: float = DEFAULT_REFUTE_RATIO
+    neutral_ratio: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name in ("support_ratio", "refute_ratio"):
+            value = getattr(self, name)
+            if value < 1.0:
+                raise ValidationError(f"{name} must be >= 1", **{name: value})
+        if self.neutral_ratio <= 0:
+            raise ValidationError(
+                "neutral_ratio must be > 0", neutral_ratio=self.neutral_ratio
+            )
+
+    def ratio_for(self, evidence: Evidence) -> float:
+        """Return the likelihood ratio contributed by one evidence item."""
+        strength = evidence.strength
+        if evidence.polarity is EvidencePolarity.SUPPORT:
+            return self.support_ratio**strength
+        if evidence.polarity is EvidencePolarity.REFUTE:
+            return 1.0 / (self.refute_ratio**strength)
+        return self.neutral_ratio
+
+    def fingerprint(self) -> str:
+        """Return a digest of the model for run metadata."""
+        return content_hash(asdict(self))

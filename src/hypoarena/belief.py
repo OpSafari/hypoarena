@@ -285,3 +285,62 @@ def accumulate(
         refuting=refuting,
         neutral=neutral,
     )
+
+
+DEFAULT_PRIOR_GRID: tuple[float, ...] = (0.1, 0.25, 0.5, 0.75, 0.9)
+
+
+def prior_sensitivity(
+    evidence: Sequence[Evidence],
+    priors: Sequence[float] = DEFAULT_PRIOR_GRID,
+    config: BeliefConfig | None = None,
+) -> tuple[tuple[float, float], ...]:
+    """Return ``(prior, posterior)`` pairs over a grid of priors.
+
+    Sensitivity analysis answers the question a reviewer always asks: does the
+    conclusion survive a different starting assumption? The evidence set and every
+    other setting are held fixed, so the spread of the returned posteriors is
+    attributable to the prior alone.
+    """
+    if not priors:
+        raise ValidationError("a prior grid must not be empty")
+    settings = config or BeliefConfig()
+    pairs = []
+    for prior in priors:
+        adjusted = BeliefConfig(
+            prior=prior,
+            likelihood=settings.likelihood,
+            contradiction_policy=settings.contradiction_policy,
+            downweight_factor=settings.downweight_factor,
+            contradiction_threshold=settings.contradiction_threshold,
+        )
+        pairs.append((prior, accumulate("sensitivity", evidence, adjusted).posterior))
+    return tuple(pairs)
+
+
+def sensitivity_spread(
+    evidence: Sequence[Evidence],
+    priors: Sequence[float] = DEFAULT_PRIOR_GRID,
+    config: BeliefConfig | None = None,
+) -> float:
+    """Return the widest posterior gap the prior grid can produce."""
+    posteriors = [
+        posterior for _, posterior in prior_sensitivity(evidence, priors, config)
+    ]
+    return max(posteriors) - min(posteriors)
+
+
+def is_prior_robust(
+    evidence: Sequence[Evidence],
+    *,
+    threshold: float = 0.5,
+    priors: Sequence[float] = DEFAULT_PRIOR_GRID,
+    config: BeliefConfig | None = None,
+) -> bool:
+    """True when the posterior stays on one side of ``threshold`` for every prior."""
+    posteriors = [
+        posterior for _, posterior in prior_sensitivity(evidence, priors, config)
+    ]
+    return all(item > threshold for item in posteriors) or all(
+        item < threshold for item in posteriors
+    )

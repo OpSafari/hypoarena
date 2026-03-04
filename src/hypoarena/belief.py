@@ -14,6 +14,7 @@ statistical model of any real experimental system.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum, unique
 
@@ -247,3 +248,40 @@ class BeliefConfig:
                 "contradiction_threshold": self.contradiction_threshold,
             }
         )
+
+
+def accumulate(
+    claim_id: str,
+    evidence: Sequence[Evidence],
+    config: BeliefConfig | None = None,
+) -> BeliefState:
+    """Fold a set of evidence items into one belief state.
+
+    Ratios multiply, so the order of ``evidence`` cannot change the posterior —
+    a property the test suite checks explicitly. The ``discount`` policy needs
+    the refuting count up front, so items are counted before they are applied.
+    """
+    settings = config or BeliefConfig()
+    supporting = sum(
+        1 for item in evidence if item.polarity is EvidencePolarity.SUPPORT
+    )
+    refuting = sum(1 for item in evidence if item.polarity is EvidencePolarity.REFUTE)
+    neutral = len(evidence) - supporting - refuting
+    ratio = 1.0
+    for item in evidence:
+        ratio *= settings.ratio_for(item, refuting=refuting)
+    contested = settings.contested(refuting)
+    if contested and settings.contradiction_policy is ContradictionPolicy.DISCOUNT:
+        ratio **= settings.downweight_factor
+    posterior = update_belief(settings.prior, ratio)
+    if contested and settings.contradiction_policy is ContradictionPolicy.REJECT:
+        posterior = MIN_PROBABILITY
+    return BeliefState(
+        claim_id=claim_id,
+        prior=settings.prior,
+        posterior=posterior,
+        likelihood_ratio=ratio,
+        supporting=supporting,
+        refuting=refuting,
+        neutral=neutral,
+    )

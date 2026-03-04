@@ -14,7 +14,8 @@ statistical model of any real experimental system.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum, unique
 
 from hypoarena.errors import (
     ValidationError,
@@ -171,3 +172,78 @@ def update_belief(prior: float, ratio: float) -> float:
     if ratio <= 0:
         raise ValidationError("likelihood ratio must be > 0", ratio=ratio)
     return clamp_probability(from_odds(to_odds(prior) * ratio))
+
+
+DEFAULT_DOWNWEIGHT_FACTOR = 0.5
+
+
+@unique
+class ContradictionPolicy(StrEnum):
+    """What to do when a claim also has refuting evidence attached."""
+
+    IGNORE = "ignore"
+    DOWNWEIGHT = "downweight"
+    DISCOUNT = "discount"
+    REJECT = "reject"
+
+
+@dataclass(frozen=True)
+class BeliefConfig:
+    """Prior, likelihood model and contradiction handling for one pass.
+
+    The policies differ in how much they punish a contested claim:
+
+    * ``ignore`` — refuting items contribute nothing (useful as a baseline);
+    * ``downweight`` — refuting ratios are raised to ``downweight_factor``, so
+      they still push the belief down but less strongly;
+    * ``discount`` — once ``contradiction_threshold`` refuting items exist, every
+      ratio (supporting included) is raised to ``downweight_factor``, pulling the
+      posterior back toward the prior to reflect contested evidence;
+    * ``reject`` — once the threshold is reached the posterior is floored, which
+      is the right choice when a contradiction invalidates the claim outright.
+    """
+
+    prior: float = DEFAULT_PRIOR
+    likelihood: LikelihoodModel = field(default_factory=LikelihoodModel)
+    contradiction_policy: ContradictionPolicy = ContradictionPolicy.DISCOUNT
+    downweight_factor: float = DEFAULT_DOWNWEIGHT_FACTOR
+    contradiction_threshold: int = 1
+
+    def __post_init__(self) -> None:
+        check_probability(self.prior, name="prior")
+        if not 0.0 < self.downweight_factor <= 1.0:
+            raise ValidationError(
+                "downweight_factor must lie within (0, 1]",
+                downweight_factor=self.downweight_factor,
+            )
+        if self.contradiction_threshold < 1:
+            raise ValidationError(
+                "contradiction_threshold must be >= 1",
+                contradiction_threshold=self.contradiction_threshold,
+            )
+
+    def contested(self, refuting: int) -> bool:
+        """True when the refuting count reaches the configured threshold."""
+        return refuting >= self.contradiction_threshold
+
+    def ratio_for(self, evidence: Evidence, *, refuting: int) -> float:
+        """Return the ratio one item contributes under this configuration."""
+        ratio = self.likelihood.ratio_for(evidence)
+        if evidence.polarity is EvidencePolarity.REFUTE:
+            if self.contradiction_policy is ContradictionPolicy.IGNORE:
+                return 1.0
+            if self.contradiction_policy is ContradictionPolicy.DOWNWEIGHT:
+                return ratio**self.downweight_factor
+        return ratio
+
+    def fingerprint(self) -> str:
+        """Return a digest of the configuration for run metadata."""
+        return content_hash(
+            {
+                "prior": self.prior,
+                "likelihood": self.likelihood.fingerprint(),
+                "contradiction_policy": self.contradiction_policy.value,
+                "downweight_factor": self.downweight_factor,
+                "contradiction_threshold": self.contradiction_threshold,
+            }
+        )

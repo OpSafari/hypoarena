@@ -19,7 +19,11 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum, unique
 
 from hypoarena.errors import (
+    UnknownReferenceError,
     ValidationError,
+)
+from hypoarena.graph import (
+    HypothesisGraph,
 )
 from hypoarena.ids import (
     content_hash,
@@ -344,3 +348,56 @@ def is_prior_robust(
     return all(item > threshold for item in posteriors) or all(
         item < threshold for item in posteriors
     )
+
+
+def accumulate_graph(
+    graph: HypothesisGraph, config: BeliefConfig | None = None
+) -> tuple[BeliefState, ...]:
+    """Accumulate beliefs for every claim in a graph.
+
+    Evidence is read in identifier order, so the result never depends on
+    insertion order. Claims without evidence keep the prior, which keeps them
+    visible in reports instead of silently disappearing.
+    """
+    states = []
+    for claim in graph.claims:
+        evidence = sorted(graph.evidence_for(claim.claim_id), key=item_key)
+        states.append(accumulate(claim.claim_id, evidence, config))
+    return tuple(states)
+
+
+def item_key(evidence: Evidence) -> str:
+    """Return the deterministic sort key for one evidence item."""
+    return evidence.evidence_id
+
+
+def rank_beliefs(states: Sequence[BeliefState]) -> tuple[str, ...]:
+    """Return claim identifiers from the most to the least supported.
+
+    Ties are broken by identifier so the ranking is total and reproducible.
+    """
+    return tuple(
+        state.claim_id
+        for state in sorted(
+            states, key=lambda state: (-state.posterior, state.claim_id)
+        )
+    )
+
+
+def belief_table(states: Sequence[BeliefState]) -> tuple[dict[str, object], ...]:
+    """Return ranked rows ready for a report table."""
+    return tuple(
+        {"position": position, **state.as_dict()}
+        for position, state in enumerate(
+            sorted(states, key=lambda state: (-state.posterior, state.claim_id)),
+            start=1,
+        )
+    )
+
+
+def state_for(states: Sequence[BeliefState], claim_id: str) -> BeliefState:
+    """Return one claim's belief state."""
+    for state in states:
+        if state.claim_id == claim_id:
+            return state
+    raise UnknownReferenceError(claim_id, "belief state")

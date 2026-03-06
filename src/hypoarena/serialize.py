@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from hypoarena.agents import ReplayAgent, ReplayEntry
+from hypoarena.belief import (
+    BeliefConfig,
+    BeliefState,
+    ContradictionPolicy,
+    LikelihoodModel,
+)
 from hypoarena.codec import (
     check_schema_version,
     dumps_line,
@@ -2282,3 +2288,192 @@ def evolution_from_lines(
             count_keys=EVOLUTION_COUNT_KEYS,
         )
     return tuple(steps)
+
+
+LIKELIHOOD_KEYS = ("support_ratio", "refute_ratio", "neutral_ratio")
+BELIEF_CONFIG_KEYS = (
+    "prior",
+    "likelihood",
+    "contradiction_policy",
+    "downweight_factor",
+    "contradiction_threshold",
+)
+BELIEF_STATE_KEYS = (
+    "claim_id",
+    "prior",
+    "posterior",
+    "likelihood_ratio",
+    "supporting",
+    "refuting",
+    "neutral",
+)
+BELIEF_RECORD_TYPES = ("meta", "config", "state")
+BELIEF_COUNT_KEYS = ("states",)
+
+
+def likelihood_model_to_dict(model: LikelihoodModel) -> dict[str, Any]:
+    """Encode the likelihood model."""
+    return asdict(model)
+
+
+def likelihood_model_from_dict(
+    payload: object, *, field: str = "likelihood"
+) -> LikelihoodModel:
+    """Decode the likelihood model."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, LIKELIHOOD_KEYS, field=field)
+    return LikelihoodModel(
+        support_ratio=require_float(mapping, "support_ratio", field=field),
+        refute_ratio=require_float(mapping, "refute_ratio", field=field),
+        neutral_ratio=require_float(mapping, "neutral_ratio", field=field),
+    )
+
+
+def belief_config_to_dict(config: BeliefConfig) -> dict[str, Any]:
+    """Encode a belief configuration."""
+    return {
+        "prior": config.prior,
+        "likelihood": likelihood_model_to_dict(config.likelihood),
+        "contradiction_policy": config.contradiction_policy.value,
+        "downweight_factor": config.downweight_factor,
+        "contradiction_threshold": config.contradiction_threshold,
+    }
+
+
+def belief_config_from_dict(
+    payload: object, *, field: str = "belief_config"
+) -> BeliefConfig:
+    """Decode a belief configuration."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, BELIEF_CONFIG_KEYS, field=field)
+    return BeliefConfig(
+        prior=require_float(mapping, "prior", field=field, minimum=0.0, maximum=1.0),
+        likelihood=likelihood_model_from_dict(
+            present_value(mapping, "likelihood", field=field),
+            field=f"{field}.likelihood",
+        ),
+        contradiction_policy=require_enum(
+            mapping, "contradiction_policy", ContradictionPolicy, field=field
+        ),
+        downweight_factor=require_float(
+            mapping, "downweight_factor", field=field, minimum=0.0, maximum=1.0
+        ),
+        contradiction_threshold=require_int(
+            mapping, "contradiction_threshold", field=field, minimum=1
+        ),
+    )
+
+
+def belief_state_to_dict(state: BeliefState) -> dict[str, Any]:
+    """Encode a belief state exactly, so replays reproduce it bit for bit."""
+    return {
+        "claim_id": state.claim_id,
+        "prior": state.prior,
+        "posterior": state.posterior,
+        "likelihood_ratio": state.likelihood_ratio,
+        "supporting": state.supporting,
+        "refuting": state.refuting,
+        "neutral": state.neutral,
+    }
+
+
+def belief_state_from_dict(payload: object, *, field: str = "state") -> BeliefState:
+    """Decode a belief state."""
+    mapping = require_mapping(payload, field=field)
+    reject_unknown_keys(mapping, BELIEF_STATE_KEYS, field=field)
+    return BeliefState(
+        claim_id=require_str(mapping, "claim_id", field=field),
+        prior=require_float(mapping, "prior", field=field, minimum=0.0, maximum=1.0),
+        posterior=require_float(
+            mapping, "posterior", field=field, minimum=0.0, maximum=1.0
+        ),
+        likelihood_ratio=require_float(
+            mapping, "likelihood_ratio", field=field, minimum=0.0
+        ),
+        supporting=require_int(mapping, "supporting", field=field, minimum=0),
+        refuting=require_int(mapping, "refuting", field=field, minimum=0),
+        neutral=require_int(mapping, "neutral", field=field, minimum=0),
+    )
+
+
+def belief_signature(states: Sequence[BeliefState], config: BeliefConfig) -> str:
+    """Return a digest over the encoded states and their configuration."""
+    return content_hash(
+        {
+            "config": belief_config_to_dict(config),
+            "states": [belief_state_to_dict(state) for state in states],
+        }
+    )
+
+
+def belief_to_lines(
+    states: Sequence[BeliefState],
+    config: BeliefConfig | None = None,
+    *,
+    include_meta: bool = True,
+) -> list[str]:
+    """Serialize belief states as ordered JSONL lines: header, config, states."""
+    settings = config or BeliefConfig()
+    lines = (
+        [meta_line({"states": len(states)}, belief_signature(states, settings))]
+        if include_meta
+        else []
+    )
+    lines.append(
+        dumps_line({"record": "config", "config": belief_config_to_dict(settings)})
+    )
+    lines.extend(
+        dumps_line({"record": "state", "state": belief_state_to_dict(state)})
+        for state in states
+    )
+    return lines
+
+
+def belief_from_lines(
+    lines: Iterable[str], *, verify_meta: bool = True
+) -> tuple[tuple[BeliefState, ...], BeliefConfig]:
+    """Rebuild belief states and their configuration from JSONL lines."""
+    states: list[BeliefState] = []
+    config: BeliefConfig | None = None
+    meta: dict[str, Any] | None = None
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        payload = loads_line(line, field="belief", line_number=number)
+        record = require_str(payload, "record", field=f"belief[{number}]")
+        if record not in BELIEF_RECORD_TYPES:
+            raise SchemaError(
+                "unknown belief record type",
+                field=f"belief[{number}]",
+                line_number=number,
+                got=record,
+                allowed=list(BELIEF_RECORD_TYPES),
+            )
+        if record == "meta":
+            reject_unknown_keys(payload, META_KEYS, field=f"belief[{number}]")
+            check_schema_version(
+                payload, field=f"belief[{number}]", expected=SCHEMA_VERSION
+            )
+            meta = payload
+        elif record == "config":
+            reject_unknown_keys(
+                payload, ("record", "config"), field=f"belief[{number}]"
+            )
+            config = belief_config_from_dict(
+                payload["config"], field=f"belief[{number}].config"
+            )
+        else:
+            reject_unknown_keys(payload, ("record", "state"), field=f"belief[{number}]")
+            states.append(
+                belief_state_from_dict(payload["state"], field=f"belief[{number}]")
+            )
+    settings = config or BeliefConfig()
+    if verify_meta:
+        check_document_meta(
+            meta,
+            counts={"states": len(states)},
+            signature=belief_signature(states, settings),
+            kind="belief",
+            count_keys=BELIEF_COUNT_KEYS,
+        )
+    return tuple(states), settings

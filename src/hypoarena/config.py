@@ -24,6 +24,9 @@ from hypoarena.dedup import (
 from hypoarena.errors import (
     ValidationError,
 )
+from hypoarena.evolve import (
+    EvolutionConfig,
+)
 from hypoarena.grounding import (
     VerifierConfig,
 )
@@ -64,6 +67,7 @@ class RunConfig:
     debate: DebateConfig = field(default_factory=DebateConfig)
     tournament: TournamentConfig = field(default_factory=TournamentConfig)
     belief: BeliefConfig = field(default_factory=BeliefConfig)
+    evolution: EvolutionConfig = field(default_factory=EvolutionConfig)
 
     def __post_init__(self) -> None:
         if not self.stages:
@@ -114,5 +118,6 @@ class RunConfig:
                 "debate": self.debate.fingerprint(),
                 "tournament": self.tournament.fingerprint(),
                 "belief": self.belief.fingerprint(),
+                "evolution": self.evolution.fingerprint(),
             }
         )

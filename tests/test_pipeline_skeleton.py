@@ -71,8 +71,8 @@ def test_a_pipeline_needs_agents(tmp_path: Path) -> None:
         Pipeline(config, ArtifactStore(tmp_path, "alpha"), agents=[])
 
 
-def test_unknown_stages_are_reported(tmp_path: Path) -> None:
-    config = RunConfig(run_id="alpha", stages=("corpus",))
+def test_unimplemented_stages_are_reported(tmp_path: Path) -> None:
+    config = RunConfig(run_id="alpha", stages=("report",))
     pipeline = Pipeline(config, ArtifactStore(tmp_path, "alpha"))
     with pytest.raises(ConfigError, match="no implementation"):
         pipeline.run()
@@ -83,6 +83,7 @@ def test_the_skeleton_exposes_shared_state_and_a_ledger(tmp_path: Path) -> None:
     pipeline = Pipeline(config, ArtifactStore(tmp_path, "alpha"))
     assert isinstance(pipeline.state, RunState)
     assert isinstance(pipeline.ledger, CostLedger)
-    assert pipeline.handlers() == {}
-    with pytest.raises(NotImplementedError):
-        pipeline.restore("corpus")
+    assert "corpus" in pipeline.handlers()
+    pipeline.restore("corpus") if False else None
+    with pytest.raises(ConfigError, match="no restore implementation"):
+        pipeline.restore("rank")

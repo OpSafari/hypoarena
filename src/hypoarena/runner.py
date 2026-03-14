@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from hypoarena.agents import (
     ScriptedAgent,
@@ -22,6 +23,7 @@ from hypoarena.artifacts import (
 )
 from hypoarena.belief import (
     BeliefState,
+    accumulate_graph,
 )
 from hypoarena.config import (
     RunConfig,
@@ -55,6 +57,7 @@ from hypoarena.graph import (
 from hypoarena.grounding import (
     GroundingReport,
     GroundingVerifier,
+    summarize_reports,
 )
 from hypoarena.ids import (
     content_hash,
@@ -67,6 +70,8 @@ from hypoarena.schema import (
     Scope,
 )
 from hypoarena.serialize import (
+    belief_from_lines,
+    belief_to_lines,
     claim_from_line,
     claim_to_line,
     corpus_from_text,
@@ -76,6 +81,8 @@ from hypoarena.serialize import (
     dedup_report_from_lines,
     dedup_report_to_lines,
     dumps_line,
+    evolution_from_lines,
+    evolution_to_lines,
     graph_from_lines,
     graph_to_lines,
     grounding_reports_from_lines,
@@ -233,6 +240,9 @@ class Pipeline:
             "dedup": self.stage_dedup,
             "debate": self.stage_debate,
             "rank": self.stage_rank,
+            "evolve": self.stage_evolve,
+            "accumulate": self.stage_accumulate,
+            "report": self.stage_report,
         }
 
     def record_usage(self, stage: str) -> None:
@@ -411,6 +421,49 @@ class Pipeline:
             self.store.read_lines(TOURNAMENT_ARTIFACT)
         )
 
+    def stage_evolve(self) -> StageResult:
+        """Expand the graph with evolved claims and record every generation."""
+        engine = self.config.evolution.engine()
+        steps = engine.run(self.state.graph, self.config.evolution.generations)
+        self.state.evolution = steps
+        flat = [record for step in steps for record in step.accepted]
+        self.store.write_lines(EVOLUTION_ARTIFACT, evolution_to_lines(steps))
+        self.store.write_lines("graph.jsonl", graph_to_lines(self.state.graph))
+        return StageResult("evolve", len(flat), (EVOLUTION_ARTIFACT, "graph.jsonl"))
+
+    def stage_accumulate(self) -> StageResult:
+        """Accumulate beliefs for every claim in the graph."""
+        beliefs = accumulate_graph(self.state.graph, self.config.belief)
+        self.state.beliefs = beliefs
+        self.store.write_lines(
+            BELIEF_ARTIFACT, belief_to_lines(beliefs, self.config.belief)
+        )
+        return StageResult("accumulate", len(beliefs), (BELIEF_ARTIFACT,))
+
+    def stage_report(self) -> StageResult:
+        """Write the run report, limitations included."""
+        payload = run_report(self)
+        self.store.write_json(REPORT_ARTIFACT, payload)
+        recovered = payload["recovered"]
+        count = recovered["planted"] if isinstance(recovered, dict) else 0
+        return StageResult("report", int(count), (REPORT_ARTIFACT,))
+
+    def restore_evolve(self) -> None:
+        """Reload evolution steps and the evolved graph."""
+        self.state.evolution = evolution_from_lines(
+            self.store.read_lines(EVOLUTION_ARTIFACT)
+        )
+        self.state.graph = graph_from_lines(self.store.read_lines("graph.jsonl"))
+
+    def restore_accumulate(self) -> None:
+        """Reload belief states."""
+        self.state.beliefs, _ = belief_from_lines(
+            self.store.read_lines(BELIEF_ARTIFACT)
+        )
+
+    def restore_report(self) -> None:
+        """The report artifact is terminal; nothing to reload."""
+
     def restore_generate(self) -> None:
         """Reload the candidate claims and the graph they were added to."""
         self.state.candidates = tuple(
@@ -450,6 +503,9 @@ class Pipeline:
             "dedup": self.restore_dedup,
             "debate": self.restore_debate,
             "rank": self.restore_rank,
+            "evolve": self.restore_evolve,
+            "accumulate": self.restore_accumulate,
+            "report": self.restore_report,
         }
         loader = loaders.get(stage)
         if loader is None:
@@ -540,3 +596,95 @@ def debate_from_line(line: str) -> DebateResult:
     """Decode one debate line."""
     payload = loads_line(line, field="debates")
     return debate_result_from_dict(payload["debate"], field="debates.debate")
+
+
+EVOLUTION_ARTIFACT = "evolution.jsonl"
+BELIEF_ARTIFACT = "beliefs.jsonl"
+REPORT_ARTIFACT = "report.json"
+REPORT_TOP = 5
+REPORT_LIMITATIONS: tuple[str, ...] = (
+    "Every corpus, claim and evidence item in this run is synthetic, generated "
+    "with planted ground truth; no real literature was read or cited.",
+    "Rankings express the configured judge's rubric preferences, not an "
+    "assessment of scientific truth.",
+    "Grounding flags come from lexical heuristics: exact span match, entity "
+    "overlap, negation cues and numeric agreement.",
+    "Belief posteriors follow a stipulated likelihood model and the selected "
+    "contradiction policy; they are bookkeeping, not calibrated probabilities.",
+    "Token counts are recorded for accounting only. Nothing in this run is "
+    "priced, billed or sent to an external service.",
+)
+
+
+def recovered_links(
+    truth: PlantedTruth, graph: HypothesisGraph
+) -> tuple[tuple[str, bool], ...]:
+    """Report, per planted link, whether a matching claim is in the graph.
+
+    Matching is on the normalized ``(subject, relation, object)`` key, which is
+    the same key the generator plants — so this is a real recovery check against
+    known ground truth, not a similarity guess.
+    """
+    present = {
+        (normalize(claim.subject), claim.relation.value, normalize(claim.object))
+        for claim in graph.claims
+    }
+    return tuple(
+        (link.statement, link.key() in present)
+        for chain in truth.chains
+        for link in chain.links
+    )
+
+
+def run_report(pipeline: Pipeline) -> dict[str, Any]:
+    """Assemble the run report payload, including its limitations section."""
+    state = pipeline.state
+    stats = state.graph.stats()
+    grounding = (
+        summarize_reports(state.reports).as_dict()
+        if state.reports
+        else summarize_reports([]).as_dict()
+    )
+    recovered = (
+        recovered_links(state.truth, state.graph) if state.truth is not None else ()
+    )
+    tournament = state.tournament
+    return {
+        "run_id": pipeline.config.run_id,
+        "config_fingerprint": pipeline.config.fingerprint(),
+        "corpus_hash": state.corpus_hash,
+        "counts": {
+            "documents": len(state.corpus) if state.corpus is not None else 0,
+            "claims": stats.claims,
+            "evidence": stats.evidence,
+            "links": stats.links,
+            "edges": stats.edges,
+        },
+        "grounding": grounding,
+        "dedup": state.dedup.as_dict() if state.dedup is not None else None,
+        "ranking": list(tournament.standings()[:REPORT_TOP]) if tournament else [],
+        "beliefs": [
+            {"claim_id": item.claim_id, "posterior": round(item.posterior, 6)}
+            for item in sorted(
+                state.beliefs, key=lambda item: (-item.posterior, item.claim_id)
+            )[:REPORT_TOP]
+        ],
+        "evolution": {
+            "generations": len(state.evolution),
+            "accepted": sum(step.accepted_count for step in state.evolution),
+            "rejected": sum(len(step.rejected) for step in state.evolution),
+        },
+        "recovered": {
+            "planted": len(recovered),
+            "recovered": sum(1 for _, found in recovered if found),
+            "rate": round(sum(1 for _, found in recovered if found) / len(recovered), 4)
+            if recovered
+            else 0.0,
+            "links": [
+                {"statement": statement, "recovered": found}
+                for statement, found in recovered
+            ],
+        },
+        "cost": pipeline.ledger.totals(),
+        "limitations": list(REPORT_LIMITATIONS),
+    }

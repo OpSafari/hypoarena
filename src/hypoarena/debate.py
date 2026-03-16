@@ -10,12 +10,13 @@ agents.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from hypoarena.agents import (
     AgentResponse,
     DiscoveryAgent,
+    Usage,
     merge_usage,
 )
 from hypoarena.corpus import (
@@ -255,6 +256,7 @@ class DebateLoop:
         an agent that returns the statement unchanged really has converged.
         """
         lines = tuple(context)
+        baseline = self.usage_snapshot()
         proposal = self.proposer.propose(self.config.proposal_prompt, lines)
         statement = proposal.text
         turns: list[DebateTurn] = []
@@ -289,20 +291,67 @@ class DebateLoop:
             converged=converged,
             rounds_run=len(turns),
             agents=self.agent_names,
-            usage=self.usage_summary(),
+            usage=self.usage_summary(baseline),
             context=lines,
             config_fingerprint=self.config.fingerprint(),
         )
 
-    def usage_summary(self) -> dict[str, object]:
-        """Return per-agent and total usage for the agents in this loop."""
+    def distinct_agents(self) -> list[DiscoveryAgent]:
+        """Return the loop's agents without duplicates, in role order."""
         distinct: list[DiscoveryAgent] = []
         for agent in (self.proposer, *self.critics, self.reviser):
             if not any(agent is item for item in distinct):
                 distinct.append(agent)
+        return distinct
+
+    def usage_snapshot(self) -> dict[str, Usage]:
+        """Copy every agent's counters, for delta accounting."""
         return {
-            "agents": {agent.name: agent.usage.as_dict() for agent in distinct},
-            "total": merge_usage(*(agent.usage for agent in distinct)).as_dict(),
+            agent.name: Usage(
+                agent.usage.calls,
+                agent.usage.prompt_tokens,
+                agent.usage.completion_tokens,
+                dict(agent.usage.by_task),
+            )
+            for agent in self.distinct_agents()
+        }
+
+    @staticmethod
+    def usage_delta(current: Usage, base: Usage) -> Usage:
+        """Return what an agent used since ``base`` was taken."""
+        return Usage(
+            calls=current.calls - base.calls,
+            prompt_tokens=current.prompt_tokens - base.prompt_tokens,
+            completion_tokens=current.completion_tokens - base.completion_tokens,
+            by_task={
+                task: count - base.by_task.get(task, 0)
+                for task, count in current.by_task.items()
+                if count - base.by_task.get(task, 0) > 0
+            },
+        )
+
+    def usage_summary(
+        self, since: Mapping[str, Usage] | None = None
+    ) -> dict[str, object]:
+        """Return per-agent and total usage for one debate.
+
+        The summary is a delta against a snapshot taken when the debate started,
+        so a transcript serializes the same way no matter what the agents did
+        earlier in the process. That is what lets a resumed run reproduce its
+        artifacts byte for byte.
+        """
+        baseline = since or {}
+        agents = self.distinct_agents()
+        deltas = [
+            self.usage_delta(agent.usage, baseline.get(agent.name, Usage()))
+            for agent in agents
+        ]
+        return {
+            "agents": {
+                agent.name: delta.as_dict()
+                for agent, delta in zip(agents, deltas, strict=True)
+            },
+            "total": merge_usage(*deltas).as_dict(),
         }
 
 

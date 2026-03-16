@@ -76,6 +76,8 @@ from hypoarena.serialize import (
     claim_to_line,
     corpus_from_text,
     corpus_to_lines,
+    cost_ledger_from_dict,
+    cost_ledger_to_dict,
     debate_result_from_dict,
     debate_result_to_dict,
     dedup_report_from_lines,
@@ -111,6 +113,7 @@ from hypoarena.tournament import (
 
 DEFAULT_AGENT_QUALITIES: tuple[float, ...] = (0.9, 0.5, 0.2)
 SUMMARY_ARTIFACT = "summary.json"
+COST_ARTIFACT = "cost.json"
 
 
 def default_agents(seed: int) -> tuple[ScriptedAgent, ...]:
@@ -475,6 +478,8 @@ class Pipeline:
         """Execute the configured stages and write the run summary."""
         results: list[StageResult] = []
         handlers = self.handlers()
+        if resume:
+            self.restore_cost()
         for stage in self.config.stages:
             if stage not in handlers:
                 raise ConfigError("stage has no implementation", stage=stage)
@@ -484,6 +489,7 @@ class Pipeline:
                 continue
             results.append(handlers[stage]())
             self.store.mark_stage(stage)
+            self.store.write_json(COST_ARTIFACT, cost_ledger_to_dict(self.ledger))
         summary = RunSummary(
             run_id=self.config.run_id,
             config_fingerprint=self.config.fingerprint(),
@@ -493,6 +499,18 @@ class Pipeline:
         self.store.write_metadata(RunMetadata.from_config(self.config))
         self.store.write_json(SUMMARY_ARTIFACT, summary.as_dict())
         return summary
+
+    def restore_cost(self) -> None:
+        """Reload previously booked token counts when resuming a run.
+
+        Without this a resumed run would report only the tokens spent in the
+        current process, so its report would differ from a straight run's. The
+        accounting belongs to the run, not to the process that happens to finish
+        it.
+        """
+        if not self.store.exists(COST_ARTIFACT):
+            return
+        self.ledger = cost_ledger_from_dict(self.store.read_json(COST_ARTIFACT))
 
     def restore(self, stage: str) -> None:
         """Reload the state a completed stage produced (used when resuming)."""

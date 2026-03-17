@@ -64,5 +64,14 @@ corpus ──> claims/evidence ──> graph ──> grounding ──> debate �
 | `hypoarena.dedup` | 精确/Jaccard/TF-IDF/MinHash+LSH 去重、聚类与新颖度守卫 |
 | `hypoarena.evolve` | 五种演化算子、新颖度闸门与按代演化的引擎 |
 | `hypoarena.belief` | odds 空间的贝叶斯累积、矛盾策略与先验敏感性 |
+| `hypoarena.config` | 运行配置记录与指纹（`RunConfig`、`STAGES`、`fingerprint`） |
+| `hypoarena.artifacts` | 运行产物目录、原子写入、检查点与文本产物（`ArtifactStore`、`RunMetadata`） |
+| `hypoarena.cost` | token 记账（只计数、不计费）（`CostLedger`、`CostEntry`） |
+| `hypoarena.stages` | 阶段与运行摘要记录（`StageResult`、`RunSummary`） |
+| `hypoarena.runner` | 流水线编排、检查点续跑与运行报告（`Pipeline`、`run_report`） |
+| `hypoarena.reports` | 把报告渲染成 Markdown 与自包含 HTML，转义不可信文本、内嵌 limitations |
+| `hypoarena.ranker` | 可选可训练 ranker 的 NumPy 层：合成数据集、TF-IDF 特征、校准与秩相关 |
+| `hypoarena.ranker_torch` | 可选可训练 ranker 的 torch 层：小 MLP、种子化训练与端到端拟合（需 torch extra） |
 
-模块表随实现推进补充；接口约定见 [api.md](api.md)。
+全部模块已落地；接口约定见 [api.md](api.md)，编排细节见 [runner.md](runner.md)，
+报告渲染见 [reports.md](reports.md)，可选 ranker 见 [ranker.md](ranker.md)。

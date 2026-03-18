@@ -2,6 +2,18 @@
 
 本项目遵循语义化版本；0.x 阶段的破坏性变更会在 minor 版本说明中显式列出。
 
+## 0.1.3
+
+- 新增 `hypoarena.debate`：角色化辩论循环（propose → critique → revise）、`DebateConfig`、`DebateResult`/`DebateTurn` 转录、确定性上下文提取与 `apply_debate`。
+- 新增 `hypoarena.tournament`：rubric 打分、Bradley–Terry/Elo 模型（平局、K 因子调度）、确定性赛程、`PlantedJudge`/`FeatureJudge` 与完整对局审计轨迹。
+- 新增 `hypoarena.dedup`：规范化文本签名、字符/词 n-gram Jaccard、TF-IDF 余弦、MinHash LSH、聚类与 `NoveltyGuard`，并在合成改写簇上给出实测 recall/precision。
+- 新增 `hypoarena.evolve`：保图演化算子（scope 收窄、变量替换、关系翻转、crossover、decomposition）与新颖度闸门 `EvolutionEngine`。
+- 新增 `hypoarena.belief`：odds 空间的贝叶斯证据累积、分级似然模型、矛盾处理策略、先验敏感性与单调性性质。
+- 新增编排层 `hypoarena.config`/`artifacts`/`cost`/`stages`/`runner`：`RunConfig` 指纹、原子产物存储与断点、token 记账（只计数不计费）、`StageResult`/`RunSummary` 与可续跑且逐字节一致的 `Pipeline`。
+- `hypoarena.serialize` 扩展：锦标赛/去重/辩论/演化/信念/配置与运行摘要的编解码。
+- 文档：debate、tournament、dedup、evolve、belief 与 runner 编排。
+- 测试：确定性与收敛扫描、Elo 对植入技能序的恢复、去重实测指标、信念单调性与 golden、对抗性 grounding、续跑逐字节一致。
+
 ## 0.1.2
 
 - 新增 `hypoarena.graph`：claim/evidence/link/edge 存储、遍历、子图与合并、`validate()` 不变量扫描、`GraphStats` 与内容签名。

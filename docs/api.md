@@ -40,7 +40,12 @@
 | `hypoarena.evolve` | 已实现 | 演化算子与新颖度闸门（`narrow_scope`、`substitute_variable`、`flip_relation`、`crossover`、`decompose`、`NoveltyGate`、`EvolutionEngine`），见 [evolve.md](evolve.md) |
 | `hypoarena.belief` | 已实现 | 贝叶斯证据累积（`BeliefConfig`、`LikelihoodModel`、`ContradictionPolicy`、`accumulate`、`accumulate_graph`、`prior_sensitivity`），见 [belief.md](belief.md) |
 | `hypoarena.text` | 已实现 | 归一化与分词（`normalize`、`tokenize`、`content_tokens`、`char_ngrams`、`word_ngrams`、`extract_numbers`、`sentence_split`、`has_negation`） |
+| `hypoarena.config` | 已实现 | 运行配置与指纹（`RunConfig`、`STAGES`、`fingerprint`），见 [runner.md](runner.md) |
+| `hypoarena.artifacts` | 已实现 | 产物目录、原子写入与断点标记（`ArtifactStore`、`RunMetadata`），见 [runner.md](runner.md) |
+| `hypoarena.cost` | 已实现 | token 记账（`CostLedger`、`CostEntry`），只计数不计费，见 [runner.md](runner.md) |
+| `hypoarena.stages` | 已实现 | 阶段与运行摘要记录（`StageResult`、`RunSummary`），见 [runner.md](runner.md) |
+| `hypoarena.runner` | 已实现 | 流水线编排、断点续跑与报告（`Pipeline`、`run_report`、`REPORT_LIMITATIONS`），见 [runner.md](runner.md) |
 
-记录字段与校验规则详见 [schema.md](schema.md)。后续模块（graph、corpus、
-grounding、agents、tournament、dedup、evolve、belief、runner、artifacts、reports）
+记录字段与校验规则详见 [schema.md](schema.md)。编排层（config、artifacts、
+cost、stages、runner）见 [runner.md](runner.md)。后续模块（reports、ranker）
 落地后会补充到本表。

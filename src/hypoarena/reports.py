@@ -8,7 +8,7 @@ so a rendered report can never be mistaken for a claim about scientific truth.
 from __future__ import annotations
 
 import html
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 # A defensive subset of characters that could break a Markdown table cell or
 # smuggle in inline HTML. This is not a full CommonMark escaper; the contract is
@@ -78,3 +78,92 @@ def html_table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
     return (
         "<table><thead><tr>" + head + "</tr></thead><tbody>" + body + "</tbody></table>"
     )
+
+
+# A rendered section: a title, table headers and the row values. Keeping the
+# extraction separate from the renderers means Markdown and HTML share one
+# source of rows and can never drift apart.
+Table = tuple[str, list[str], list[list[object]]]
+
+COUNT_FIELDS = ("documents", "claims", "evidence", "links", "edges")
+GROUNDING_FIELDS = (
+    "total",
+    "grounded",
+    "weakly_grounded",
+    "ungrounded",
+    "fabricated",
+    "grounded_rate",
+    "mean_score",
+)
+RANKING_HEADERS = (
+    "#",
+    "subject",
+    "elo",
+    "played",
+    "wins",
+    "losses",
+    "draws",
+    "win_rate",
+)
+RANKING_FIELDS = (
+    "position",
+    "subject",
+    "elo",
+    "played",
+    "wins",
+    "losses",
+    "draws",
+    "win_rate",
+)
+DEDUP_FIELDS = (
+    "total",
+    "clusters",
+    "duplicated",
+    "duplicate_rate",
+    "method",
+    "threshold",
+)
+
+
+def _sub(report: Mapping[str, object], key: str) -> Mapping[str, object]:
+    """Return ``report[key]`` when it is a mapping, else an empty mapping."""
+    value = report.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _items(report: Mapping[str, object], key: str) -> list[object]:
+    """Return ``report[key]`` as a list when it is a sequence, else empty."""
+    value = report.get(key)
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def counts_table(report: Mapping[str, object]) -> Table:
+    """Extract the artifact-count section."""
+    counts = _sub(report, "counts")
+    rows = [[name, counts.get(name, 0)] for name in COUNT_FIELDS]
+    return ("Counts", ["artifact", "count"], rows)
+
+
+def grounding_table(report: Mapping[str, object]) -> Table:
+    """Extract the grounding-flag summary section."""
+    grounding = _sub(report, "grounding")
+    rows = [[name, grounding.get(name, 0)] for name in GROUNDING_FIELDS]
+    return ("Grounding", ["metric", "value"], rows)
+
+
+def ranking_table(report: Mapping[str, object]) -> Table:
+    """Extract the tournament standings section."""
+    rows: list[list[object]] = []
+    for entry in _items(report, "ranking"):
+        if isinstance(entry, Mapping):
+            rows.append([entry.get(field) for field in RANKING_FIELDS])
+    return ("Ranking", list(RANKING_HEADERS), rows)
+
+
+def dedup_table(report: Mapping[str, object]) -> Table | None:
+    """Extract the dedup section, or ``None`` when the run performed no dedup."""
+    value = report.get("dedup")
+    if not isinstance(value, Mapping):
+        return None
+    rows = [[name, value.get(name, "")] for name in DEDUP_FIELDS]
+    return ("Dedup", ["metric", "value"], rows)

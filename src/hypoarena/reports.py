@@ -266,3 +266,65 @@ def render_markdown(report: Mapping[str, object]) -> str:
         lines.append(f"- {escape_markdown_cell(item)}")
     lines.append("")
     return "\n".join(lines)
+
+
+# Inline CSS only: no external stylesheet, script, font or image, so a saved
+# report opens offline and renders identically anywhere.
+_HTML_STYLE = (
+    "body{font-family:system-ui,-apple-system,sans-serif;margin:2rem auto;"
+    "max-width:60rem;line-height:1.5;color:#111;padding:0 1rem}"
+    "h1{font-size:1.6rem}h2{font-size:1.2rem;margin-top:1.6rem}"
+    "table{border-collapse:collapse;margin:0.5rem 0}"
+    "th,td{border:1px solid #ccc;padding:0.25rem 0.6rem;text-align:left}"
+    "th{background:#f5f5f5}code{background:#f5f5f5;padding:0 0.2rem}"
+    "ul.limitations{background:#fff8e1;border:1px solid #e0c060;"
+    "padding:0.6rem 1.2rem;border-radius:4px}"
+)
+
+
+def render_html(report: Mapping[str, object]) -> str:
+    """Render the whole report as a self-contained HTML document.
+
+    Every dynamic value passes through :func:`escape_html`, so hostile statement
+    text can never open a tag or inject a script. The limitations block is always
+    present and visually highlighted.
+    """
+    run_id = escape_html(report.get("run_id", ""))
+    fingerprint = escape_html(report.get("config_fingerprint", ""))
+    corpus_hash = escape_html(report.get("corpus_hash", ""))
+    out = [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="utf-8">',
+        f"<title>Run report {run_id}</title>",
+        f"<style>{_HTML_STYLE}</style>",
+        "</head>",
+        "<body>",
+        f"<h1>Run report: {run_id}</h1>",
+        "<ul>",
+        f"<li>config fingerprint: <code>{fingerprint}</code></li>",
+        f"<li>corpus hash: <code>{corpus_hash}</code></li>",
+        "</ul>",
+    ]
+    for build in _TABLES:
+        table = build(report)
+        if table is None:
+            continue
+        title, headers, rows = table
+        out.append(f"<h2>{escape_html(title)}</h2>")
+        out.append(html_table(headers, rows))
+    out.append("<h2>Recovered planted links</h2>")
+    out.append("<ul>")
+    for statement, found in recovered_links(report):
+        mark = "recovered" if found else "missing"
+        out.append(f"<li>[{mark}] {escape_html(statement)}</li>")
+    out.append("</ul>")
+    out.append("<h2>Limitations</h2>")
+    out.append('<ul class="limitations">')
+    for item in _items(report, "limitations"):
+        out.append(f"<li>{escape_html(item)}</li>")
+    out.append("</ul>")
+    out.append("</body>")
+    out.append("</html>")
+    return "\n".join(out)

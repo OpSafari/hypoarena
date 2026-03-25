@@ -10,6 +10,8 @@ from __future__ import annotations
 import html
 from collections.abc import Mapping, Sequence
 
+from hypoarena.artifacts import ArtifactStore
+
 # A defensive subset of characters that could break a Markdown table cell or
 # smuggle in inline HTML. This is not a full CommonMark escaper; the contract is
 # only that untrusted statement text can never split a cell or open a raw tag.
@@ -328,3 +330,21 @@ def render_html(report: Mapping[str, object]) -> str:
     out.append("</body>")
     out.append("</html>")
     return "\n".join(out)
+
+
+MARKDOWN_ARTIFACT = "report.md"
+HTML_ARTIFACT = "report.html"
+
+
+def write_reports(
+    store: ArtifactStore, report: Mapping[str, object]
+) -> tuple[str, str]:
+    """Render ``report`` and atomically write report.md and report.html.
+
+    Returns the two artifact names so the caller can record them alongside the
+    JSON payload. Both files are pure functions of ``report``, so a resumed run
+    rewrites byte-identical documents.
+    """
+    store.write_text(MARKDOWN_ARTIFACT, render_markdown(report))
+    store.write_text(HTML_ARTIFACT, render_html(report))
+    return (MARKDOWN_ARTIFACT, HTML_ARTIFACT)

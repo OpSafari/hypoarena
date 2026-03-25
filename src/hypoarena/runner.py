@@ -59,6 +59,7 @@ from hypoarena.grounding import (
     summarize_reports,
 )
 from hypoarena.ids import make_id
+from hypoarena.reports import write_reports
 from hypoarena.schema import (
     Claim,
     PredictedRelation,
@@ -384,12 +385,13 @@ class Pipeline:
         return StageResult("accumulate", len(beliefs), (BELIEF_ARTIFACT,))
 
     def stage_report(self) -> StageResult:
-        """Write the run report, limitations included."""
+        """Write the run report as JSON plus rendered Markdown and HTML."""
         payload = run_report(self)
         self.store.write_json(REPORT_ARTIFACT, payload)
+        rendered = write_reports(self.store, payload)
         recovered = payload["recovered"]
         count = recovered["planted"] if isinstance(recovered, dict) else 0
-        return StageResult("report", int(count), (REPORT_ARTIFACT,))
+        return StageResult("report", int(count), (REPORT_ARTIFACT, *rendered))
 
     def restore_evolve(self) -> None:
         """Reload evolution steps and the evolved graph."""

@@ -12,10 +12,13 @@ model's ability.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import nn
 
 from hypoarena.errors import ValidationError
+from hypoarena.ranker import RankerData
 
 
 class RubricRanker(nn.Module):
@@ -43,3 +46,69 @@ class RubricRanker(nn.Module):
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Return a column of predicted scores, each within ``[0, 1]``."""
         return self.net(features)
+
+
+@dataclass(frozen=True)
+class TrainResult:
+    """The trained model plus its loss history and hyperparameters.
+
+    The full per-epoch loss history is kept so a test can assert the loss really
+    moved down over training instead of trusting a single final number.
+    """
+
+    model: RubricRanker
+    losses: tuple[float, ...]
+    epochs: int
+    seed: int
+
+    @property
+    def first_loss(self) -> float:
+        """The loss at epoch 0, before any meaningful update."""
+        return self.losses[0]
+
+    @property
+    def final_loss(self) -> float:
+        """The loss after the last update."""
+        return self.losses[-1]
+
+    def loss_decreased(self) -> bool:
+        """True when training moved the loss down, as it must."""
+        return self.final_loss < self.first_loss
+
+
+def train_ranker(
+    data: RankerData,
+    *,
+    hidden_dim: int = 16,
+    epochs: int = 300,
+    lr: float = 0.05,
+    seed: int = 0,
+) -> TrainResult:
+    """Train the ranker with full-batch Adam; the seed makes it reproducible.
+
+    Full-batch gradient descent on a small synthetic problem is deterministic on
+    CPU once the seed fixes the initial weights, so two calls with the same seed
+    produce identical loss histories.
+    """
+    if epochs < 1:
+        raise ValidationError("epochs must be >= 1", epochs=epochs)
+    if lr <= 0:
+        raise ValidationError("learning rate must be > 0", lr=lr)
+    if len(data) == 0:
+        raise ValidationError("cannot train on an empty dataset")
+    torch.manual_seed(seed)
+    input_dim = int(data.features.shape[1])
+    model = RubricRanker(input_dim, hidden_dim)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.MSELoss()
+    features = torch.tensor(data.features, dtype=torch.float32)
+    targets = torch.tensor(data.scores, dtype=torch.float32).unsqueeze(1)
+    losses: list[float] = []
+    model.train()
+    for _ in range(epochs):
+        optimizer.zero_grad()
+        loss = loss_fn(model(features), targets)
+        loss.backward()
+        optimizer.step()
+        losses.append(float(loss.item()))
+    return TrainResult(model=model, losses=tuple(losses), epochs=epochs, seed=seed)

@@ -19,7 +19,7 @@ import torch
 from torch import nn
 
 from hypoarena.errors import ValidationError
-from hypoarena.ranker import RankerData
+from hypoarena.ranker import RankerData, spearman_correlation
 
 
 class RubricRanker(nn.Module):
@@ -126,3 +126,32 @@ def predict_scores(model: RubricRanker, features: np.ndarray) -> np.ndarray:
         tensor = torch.tensor(np.asarray(features, dtype=np.float32))
         predicted = model(tensor).detach().cpu().numpy().ravel()
     return predicted
+
+
+@dataclass(frozen=True)
+class FitResult:
+    """End-to-end outcome: the training result, predictions and rank agreement."""
+
+    train: TrainResult
+    predictions: np.ndarray
+    spearman: float
+
+
+def fit_ranker(
+    data: RankerData,
+    *,
+    hidden_dim: int = 16,
+    epochs: int = 300,
+    lr: float = 0.05,
+    seed: int = 0,
+) -> FitResult:
+    """Train, predict on the same data and report rank agreement.
+
+    In-sample on purpose: this demonstrates the mechanism fits planted signal,
+    not that it generalises to held-out science. The returned Spearman rho is a
+    measured number on synthetic data, never a benchmark claim.
+    """
+    result = train_ranker(data, hidden_dim=hidden_dim, epochs=epochs, lr=lr, seed=seed)
+    predictions = predict_scores(result.model, data.features)
+    rho = spearman_correlation(list(predictions), list(data.scores))
+    return FitResult(train=result, predictions=predictions, spearman=rho)

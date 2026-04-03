@@ -1,39 +1,158 @@
-"""Command line entry point for hypoarena.
+"""Command line interface for hypoarena.
 
-The parser grows with the toolkit; this initial version only reports the
-installed version so that packaging smoke tests exercise a real console script.
+Every subcommand drives the same offline pipeline (see :mod:`hypoarena.runner`)
+over a synthetic corpus with planted ground truth, then prints a short human
+summary. Failures raised as :class:`hypoarena.errors.HypoArenaError` are reported
+on stderr and mapped to that error's ``exit_code`` so scripts can branch on the
+category without parsing messages. Nothing here touches the network or torch.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+import sys
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from hypoarena._version import __version__
+from hypoarena.artifacts import ArtifactStore
+from hypoarena.config import STAGES, RunConfig
+from hypoarena.errors import HypoArenaError
+from hypoarena.runner import Pipeline
+from hypoarena.synthetic import SyntheticConfig
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    """One registered subcommand: a name, help text and handler."""
+
+    name: str
+    help: str
+    handler: Callable[[argparse.Namespace], int]
+
+
+# Commands register themselves in definition order, so ``--help`` lists them in
+# the pipeline's own order. Each is appended right after its handler below.
+COMMANDS: list[CommandSpec] = []
+
+
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
+    """Add the run-configuration flags shared by every subcommand."""
+    parser.add_argument(
+        "--seed", type=int, default=270106, help=" RNG seed for the synthetic run"
+    )
+    parser.add_argument(
+        "--out", default="runs", help="artifact root directory (default: runs)"
+    )
+    parser.add_argument(
+        "--run-id", default="run", help="run identifier; a single path segment"
+    )
+    parser.add_argument(
+        "--chains", type=int, default=3, help="planted causal chains in the corpus"
+    )
+    parser.add_argument(
+        "--chain-length",
+        type=int,
+        default=3,
+        help="variables per planted chain (links = length - 1)",
+    )
+
+
+def _stages_up_to(stage: str) -> tuple[str, ...]:
+    """Return the pipeline prefix that ends at ``stage`` (inclusive)."""
+    return STAGES[: STAGES.index(stage) + 1]
+
+
+def _build_config(args: argparse.Namespace, up_to: str | None = None) -> RunConfig:
+    """Build a :class:`RunConfig` from parsed CLI arguments."""
+    stages = STAGES if up_to is None else _stages_up_to(up_to)
+    return RunConfig(
+        seed=args.seed,
+        run_id=args.run_id,
+        stages=stages,
+        corpus=SyntheticConfig(
+            seed=args.seed, chains=args.chains, chain_length=args.chain_length
+        ),
+    )
+
+
+def _run(args: argparse.Namespace, up_to: str | None = None) -> Pipeline:
+    """Run the pipeline through ``up_to`` and return it for summarising."""
+    config = _build_config(args, up_to)
+    pipeline = Pipeline(config, ArtifactStore(args.out, config.run_id))
+    pipeline.run()
+    return pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Return the top-level argument parser."""
+    """Return the top-level parser with every registered subcommand."""
     parser = argparse.ArgumentParser(
         prog="hypoarena",
         description=(
             "Offline workbench for hypothesis-discovery pipelines: grounded "
-            "claim graphs, synthetic literature, debate loops and Elo tournaments."
+            "claim graphs, synthetic literature, debate loops and Elo "
+            "tournaments. Every command runs on synthetic data with planted "
+            "ground truth and claims no real benchmark."
         ),
     )
     parser.add_argument(
         "--version", action="version", version=f"hypoarena {__version__}"
     )
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+    for spec in COMMANDS:
+        sub = subparsers.add_parser(spec.name, help=spec.help, description=spec.help)
+        _add_common_args(sub)
+        sub.set_defaults(func=spec.handler)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse ``argv`` and return a process exit code."""
+    """Parse ``argv``, dispatch to a subcommand and return a process exit code."""
     parser = build_parser()
-    parser.parse_args(argv)
-    parser.print_help()
+    args = parser.parse_args(argv)
+    handler = getattr(args, "func", None)
+    if handler is None:
+        parser.print_help()
+        return 0
+    try:
+        return int(handler(args))
+    except HypoArenaError as error:
+        print(f"hypoarena: {error}", file=sys.stderr)
+        return error.exit_code
+
+
+def _cmd_corpus(args: argparse.Namespace) -> int:
+    """Generate the synthetic corpus and report its size and hash."""
+    pipeline = _run(args, up_to="corpus")
+    corpus = pipeline.state.corpus
+    count = len(corpus) if corpus is not None else 0
+    print(f"corpus: {count} documents (hash {pipeline.state.corpus_hash})")
+    print(f"artifacts: {pipeline.store.root}")
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+COMMANDS.append(
+    CommandSpec(
+        "corpus",
+        "generate a synthetic corpus with planted ground truth",
+        _cmd_corpus,
+    )
+)
+
+
+def _cmd_generate(args: argparse.Namespace) -> int:
+    """Propose candidate claims from the corpus and add them to the graph."""
+    pipeline = _run(args, up_to="generate")
+    print(f"generate: {len(pipeline.state.candidates)} candidate claims proposed")
+    print(f"graph: {len(pipeline.state.graph.claims)} claims total")
+    print(f"artifacts: {pipeline.store.root}")
+    return 0
+
+
+COMMANDS.append(
+    CommandSpec(
+        "generate",
+        "propose candidate claims from the corpus",
+        _cmd_generate,
+    )
+)

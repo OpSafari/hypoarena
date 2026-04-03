@@ -196,3 +196,35 @@ def _cmd_dedup(args: argparse.Namespace) -> int:
 
 
 COMMANDS.append(CommandSpec("dedup", "find near-duplicate claims", _cmd_dedup))
+
+
+def _cmd_debate(args: argparse.Namespace) -> int:
+    """Run the propose-critique-revise debate loop over proposed claims."""
+    pipeline = _run(args, up_to="debate")
+    print(f"debate: {len(pipeline.state.debates)} claims debated and revised")
+    print(f"artifacts: {pipeline.store.root}")
+    return 0
+
+
+COMMANDS.append(
+    CommandSpec("debate", "run the propose-critique-revise loop", _cmd_debate)
+)
+
+
+def _cmd_rank(args: argparse.Namespace) -> int:
+    """Rank every claim with an Elo tournament and print the top standings."""
+    pipeline = _run(args, up_to="rank")
+    tournament = pipeline.state.tournament
+    if tournament is None:
+        print("rank: no tournament produced")
+        return 0
+    print(
+        f"rank: {len(tournament.matches)} matches over "
+        f"{len(tournament.subjects)} claims"
+    )
+    for row in tournament.standings()[:5]:
+        print(f"  #{row['position']} {row['subject']} elo={row['elo']}")
+    return 0
+
+
+COMMANDS.append(CommandSpec("rank", "rank claims with an Elo tournament", _cmd_rank))

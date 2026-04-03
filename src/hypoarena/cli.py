@@ -18,6 +18,7 @@ from hypoarena._version import __version__
 from hypoarena.artifacts import ArtifactStore
 from hypoarena.config import STAGES, RunConfig
 from hypoarena.errors import HypoArenaError
+from hypoarena.grounding import summarize_reports
 from hypoarena.runner import Pipeline
 from hypoarena.synthetic import SyntheticConfig
 
@@ -156,3 +157,42 @@ COMMANDS.append(
         _cmd_generate,
     )
 )
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    """Grade every claim against the corpus and summarise the flags."""
+    pipeline = _run(args, up_to="verify")
+    summary = summarize_reports(pipeline.state.reports)
+    print(f"verify: {summary.total} claims graded")
+    print(
+        f"  grounded={summary.grounded} weak={summary.weakly_grounded} "
+        f"ungrounded={summary.ungrounded} fabricated={summary.fabricated}"
+    )
+    print(
+        f"  grounded_rate={summary.grounded_rate:.3f} "
+        f"mean_score={summary.mean_score:.3f}"
+    )
+    return 0
+
+
+COMMANDS.append(
+    CommandSpec("verify", "grade every claim against the corpus", _cmd_verify)
+)
+
+
+def _cmd_dedup(args: argparse.Namespace) -> int:
+    """Report the near-duplicate claim clusters found in the graph."""
+    pipeline = _run(args, up_to="dedup")
+    report = pipeline.state.dedup
+    if report is None:
+        print("dedup: no report produced")
+        return 0
+    print(f"dedup: {report.total} texts, {len(report.clusters)} clusters")
+    print(
+        f"  duplicated={report.duplicated} "
+        f"duplicate_rate={report.duplicate_rate:.3f} method={report.config.method}"
+    )
+    return 0
+
+
+COMMANDS.append(CommandSpec("dedup", "find near-duplicate claims", _cmd_dedup))

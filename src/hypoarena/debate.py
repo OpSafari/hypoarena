@@ -139,8 +139,13 @@ class DebateConfig:
         return self.critique_prompt.format(statement=statement)
 
     def revise_prompt_for(self, statement: str) -> str:
-        """Render the revision prompt for one statement."""
-        return self.revise_prompt.format(statement=statement)
+        """Return the revision prompt for one statement.
+
+        Following the adapter convention documented above, revision uses the
+        statement itself as the prompt and supplies the critiques as context, so
+        there is no separate template to render here.
+        """
+        return statement
 
     def fingerprint(self) -> str:
         """Return a digest of the configuration for run metadata."""

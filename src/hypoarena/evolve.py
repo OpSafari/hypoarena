@@ -211,17 +211,27 @@ def substitute_variable(
     # A substitution that would make the claim self-referential is rejected by
     # the Claim constructor itself ("subject and object must differ"), so there
     # is no separate check here to fall out of sync with the schema.
+    new_id = evolved_claim_id(
+        "substitute_variable",
+        (claim.claim_id,),
+        statement,
+        extra=f"{slot}:{replacement}",
+    )
+    provenance = evolved_provenance("substitute_variable", [claim], seed=seed)
+    if slot == "subject":
+        return replace(
+            claim,
+            claim_id=new_id,
+            statement=statement,
+            subject=replacement,
+            provenance=provenance,
+        )
     return replace(
         claim,
-        claim_id=evolved_claim_id(
-            "substitute_variable",
-            (claim.claim_id,),
-            statement,
-            extra=f"{slot}:{replacement}",
-        ),
+        claim_id=new_id,
         statement=statement,
-        provenance=evolved_provenance("substitute_variable", [claim], seed=seed),
-        **{slot: replacement},
+        object=replacement,
+        provenance=provenance,
     )
 
 

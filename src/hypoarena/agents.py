@@ -493,8 +493,8 @@ class ReplayAgent(BaseAgent):
                     position=self._cursor - 1,
                 )
             return entry.response(request.request_id, agent=self.name)
-        entry = self._by_key.get((request.task, request.prompt, request.context))
-        if entry is None:
+        keyed = self._by_key.get((request.task, request.prompt, request.context))
+        if keyed is None:
             if self.fallback is not None:
                 return AgentResponse(
                     request_id=request.request_id,
@@ -510,7 +510,7 @@ class ReplayAgent(BaseAgent):
                 task=request.task,
                 fingerprint=request.fingerprint(),
             )
-        return entry.response(request.request_id, agent=self.name)
+        return keyed.response(request.request_id, agent=self.name)
 
 
 @dataclass(frozen=True)

@@ -57,6 +57,11 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         default=3,
         help="variables per planted chain (links = length - 1)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse existing checkpoints instead of re-running completed stages",
+    )
 
 
 def _stages_up_to(stage: str) -> tuple[str, ...]:
@@ -81,7 +86,7 @@ def _run(args: argparse.Namespace, up_to: str | None = None) -> Pipeline:
     """Run the pipeline through ``up_to`` and return it for summarising."""
     config = _build_config(args, up_to)
     pipeline = Pipeline(config, ArtifactStore(args.out, config.run_id))
-    pipeline.run()
+    pipeline.run(resume=args.resume)
     return pipeline
 
 

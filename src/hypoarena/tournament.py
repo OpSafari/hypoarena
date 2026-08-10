@@ -444,7 +444,10 @@ MAX_JUDGE_NOISE = 0.4
 class Judge(Protocol):
     """Scores one claim on the rubric; may take the opponent into account."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """Read-only identifier so frozen dataclass judges conform."""
+        ...
 
     def score(self, claim: Claim, *, opponent: Claim | None = None) -> RubricScore: ...
 

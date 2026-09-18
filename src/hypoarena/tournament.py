@@ -159,8 +159,12 @@ class RubricWeights:
 def weighted_total(score: RubricScore, weights: RubricWeights) -> float:
     """Return the weighted rubric total in ``[0, 1]``."""
     normalized = weights.normalized()
-    return sum(
-        score.dimension(name) * normalized.weight(name) for name in RUBRIC_DIMENSIONS
+    return round(
+        sum(
+            score.dimension(name) * normalized.weight(name)
+            for name in RUBRIC_DIMENSIONS
+        ),
+        6,
     )
 
 

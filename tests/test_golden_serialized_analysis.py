@@ -18,7 +18,7 @@ from hypoarena.synthetic import SyntheticConfig
 DIGESTS = {
     "grounding.jsonl": "9a23ae4fcd42ead3",
     "dedup.jsonl": "9de7cff9e6e543b3",
-    "beliefs.jsonl": "b6127c19de376b43",
+    "beliefs.jsonl": "81b181d700d24da3",
     "evolution.jsonl": "00ea44ae0a0be637",
 }
 

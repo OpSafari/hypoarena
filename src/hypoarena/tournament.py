@@ -246,7 +246,7 @@ class EloModel:
         expected = self.expectation(left, right)
         left_delta = self.k_for(left_played) * (outcome - expected)
         right_delta = self.k_for(right_played) * ((1.0 - outcome) - (1.0 - expected))
-        return (left + left_delta, right + right_delta)
+        return (round(left + left_delta, 6), round(right + right_delta, 6))
 
     def fingerprint(self) -> str:
         """Return a digest of the model settings for run metadata."""

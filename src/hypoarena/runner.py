@@ -328,7 +328,9 @@ class Pipeline:
         debates: list[DebateResult] = []
         for claim in proposed:
             result = loop.run(context)
-            apply_debate(self.state.graph, claim.claim_id, result)
+            apply_debate(
+                self.state.graph, claim.claim_id, result, agent_id=loop.reviser.name
+            )
             debates.append(result)
         self.record_usage("debate")
         self.state.debates = tuple(debates)

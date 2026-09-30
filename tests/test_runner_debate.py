@@ -52,6 +52,9 @@ def test_debated_claims_carry_revised_provenance(tmp_path: Path) -> None:
     assert revised
     assert all(claim.provenance.generation >= 1 for claim in revised)
     assert all(claim.provenance.origin == "agent" for claim in revised)
+    assert all(
+        claim.provenance.agent_id == pipeline.agents[-1].name for claim in revised
+    )
 
 
 def test_corpus_claims_are_not_debated(tmp_path: Path) -> None:

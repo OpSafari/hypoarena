@@ -18,7 +18,7 @@ from hypoarena.synthetic import SyntheticConfig
 
 DIGESTS = {
     "corpus.jsonl": "ca3f3f4c6102690b",
-    "graph.jsonl": "3b8a7789f1c57317",
+    "graph.jsonl": "9065a34c237089c5",
     "truth.jsonl": "6baa7235b33fe84d",
 }
 

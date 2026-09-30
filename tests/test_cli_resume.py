@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from hypoarena.cli import main
 
 SMALL = ["--chains", "2", "--chain-length", "2", "--seed", "5"]
@@ -31,3 +33,27 @@ def test_resume_without_prior_checkpoints_still_runs(tmp_path: Path) -> None:
     )
     assert code == 0
     assert (tmp_path / "fresh" / "grounding.jsonl").exists()
+
+
+def test_resume_with_a_different_seed_is_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    first = ["--chains", "1", "--chain-length", "2", "--seed", "11"]
+    changed = ["--chains", "1", "--chain-length", "2", "--seed", "22"]
+    assert main(["corpus", "--out", str(tmp_path), "--run-id", "r", *first]) == 0
+    capsys.readouterr()
+
+    code = main(
+        [
+            "corpus",
+            "--out",
+            str(tmp_path),
+            "--run-id",
+            "r",
+            "--resume",
+            *changed,
+        ]
+    )
+
+    assert code == 5
+    assert "configuration does not match" in capsys.readouterr().err

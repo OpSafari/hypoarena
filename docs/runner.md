@@ -47,6 +47,11 @@ corpus → generate → verify → dedup → debate → rank → evolve → accu
 逐字节相同**——包括 token 记账：ledger 会先从 `cost.json` 恢复历史用量，再累加
 本次进程内的开销，因此报告不会因为分两次跑而少记。
 
+运行元数据会在第一个阶段开始前写入，因此阶段中途失败后仍能校验原配置。续跑会
+先检查包版本、schema、配置指纹和 checkpoint 前缀；允许用相同配置从较短阶段前缀
+继续到更长前缀，但拒绝复用由不同 seed 或其他设置产生的产物。不带 `--resume` 的
+新运行会先清除旧 checkpoint，避免较短的新运行误用先前留下的下游完成标记。
+
 ## token 记账
 
 `CostLedger` 记录每个阶段的 prompt/completion token 数，只做**计数**：没有单价、

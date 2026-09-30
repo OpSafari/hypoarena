@@ -101,6 +101,40 @@ def test_resuming_twice_changes_nothing(tmp_path: Path) -> None:
     assert read_all(tmp_path, "idempotent") == first
 
 
+def test_resume_rejects_a_changed_configuration(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path, "changed")
+    original = config("changed", stages=STAGES[:1])
+    Pipeline(original, store).run()
+    corpus_before = store.path("corpus.jsonl").read_bytes()
+    metadata_before = store.path("run.json").read_bytes()
+    changed = RunConfig(
+        seed=99,
+        run_id="changed",
+        stages=STAGES[:1],
+        corpus=SyntheticConfig(seed=99, chains=2, chain_length=2),
+    )
+
+    with pytest.raises(ConfigError, match="configuration does not match"):
+        Pipeline(changed, store).run(resume=True)
+
+    assert store.path("corpus.jsonl").read_bytes() == corpus_before
+    assert store.path("run.json").read_bytes() == metadata_before
+
+
+def test_a_fresh_prefix_invalidates_downstream_checkpoints(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path, "fresh-prefix")
+    full = config("fresh-prefix")
+    Pipeline(full, store).run()
+
+    prefix = config("fresh-prefix", stages=STAGES[:2])
+    Pipeline(prefix, store).run()
+
+    assert store.completed_stages() == STAGES[:2]
+    summary = Pipeline(full, store).run(resume=True)
+    assert summary.skipped == STAGES[:2]
+    assert summary.executed == STAGES[2:]
+
+
 def test_a_failed_stage_leaves_earlier_artifacts_usable(tmp_path: Path) -> None:
     class Failing(Pipeline):
         """Pipeline whose ranking stage always fails."""
@@ -115,6 +149,7 @@ def test_a_failed_stage_leaves_earlier_artifacts_usable(tmp_path: Path) -> None:
     assert store.stage_done("verify") is True
     assert store.stage_done("rank") is False
     assert store.exists("grounding.jsonl")
+    assert store.read_metadata().config_fingerprint == run_config.fingerprint()
     with pytest.raises(ArtifactError):
         store.read_lines("tournament.jsonl")
 

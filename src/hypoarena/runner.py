@@ -18,6 +18,7 @@ from hypoarena.agents import (
     Usage,
 )
 from hypoarena.artifacts import (
+    METADATA_ARTIFACT,
     ArtifactStore,
     RunMetadata,
 )
@@ -416,12 +417,61 @@ class Pipeline:
         )
         self.state.graph = graph_from_lines(self.store.read_lines("graph.jsonl"))
 
+    def validate_resume(self, completed: tuple[str, ...]) -> None:
+        """Reject checkpoints that cannot belong to the requested run."""
+        if not completed:
+            return
+        if not self.store.exists(METADATA_ARTIFACT):
+            raise ConfigError(
+                "cannot resume checkpoints without run metadata",
+                completed=list(completed),
+            )
+        existing = self.store.read_metadata()
+        expected = RunMetadata.from_config(self.config)
+        if (
+            existing.package_version != expected.package_version
+            or existing.schema_version != expected.schema_version
+        ):
+            raise ConfigError(
+                "resume metadata is incompatible with this package",
+                existing_package=existing.package_version,
+                requested_package=expected.package_version,
+                existing_schema=existing.schema_version,
+                requested_schema=expected.schema_version,
+            )
+        if completed != existing.stages[: len(completed)]:
+            raise ConfigError(
+                "completed checkpoints are not a prefix of the recorded run",
+                completed=list(completed),
+                recorded=list(existing.stages),
+            )
+        if self.config.stages[: len(existing.stages)] != existing.stages:
+            raise ConfigError(
+                "resume stages must extend the recorded run",
+                recorded=list(existing.stages),
+                requested=list(self.config.stages),
+            )
+        requested_prefix = self.config.with_stages(existing.stages)
+        requested_fingerprint = requested_prefix.fingerprint()
+        if requested_fingerprint != existing.config_fingerprint:
+            raise ConfigError(
+                "resume configuration does not match existing artifacts",
+                existing=existing.config_fingerprint,
+                requested=requested_fingerprint,
+            )
+
     def run(self, *, resume: bool = False) -> RunSummary:
         """Execute the configured stages and write the run summary."""
         results: list[StageResult] = []
         handlers = self.handlers()
+        completed = self.store.completed_stages()
         if resume:
-            self.restore_cost()
+            self.validate_resume(completed)
+            if completed:
+                self.restore_cost()
+        else:
+            self.store.clear_checkpoints()
+        self.store.write_metadata(RunMetadata.from_config(self.config))
         for stage in self.config.stages:
             if stage not in handlers:
                 raise ConfigError("stage has no implementation", stage=stage)
@@ -438,7 +488,6 @@ class Pipeline:
             stages=tuple(results),
             completed=True,
         )
-        self.store.write_metadata(RunMetadata.from_config(self.config))
         self.store.write_json(SUMMARY_ARTIFACT, summary.as_dict())
         return summary
 

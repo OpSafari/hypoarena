@@ -236,3 +236,35 @@ def test_negation_cues_are_normalized_forms() -> None:
     assert "doesnt" in NEGATION_CUES
     assert "doesn't" not in NEGATION_CUES
     assert all(cue == normalize(cue) for cue in NEGATION_CUES)
+
+
+def test_tokenize_emits_one_token_per_cjk_ideograph() -> None:
+    assert tokenize("基因G3导致") == ["基", "因", "g3", "导", "致"]
+
+
+def test_tokenize_returns_empty_for_cjk_punctuation_only() -> None:
+    assert tokenize("，。！？") == []
+
+
+def test_content_tokens_preserves_cjk_characters() -> None:
+    assert content_tokens("基因G3导致") == ["基", "因", "g3", "导", "致"]
+
+
+def test_word_shingles_no_longer_collapse_distinct_cjk_claims() -> None:
+    from hypoarena import dedup
+
+    left = "基因G3导致细胞凋亡率上升"
+    right = "基因G3抑制肿瘤转移"
+    assert dedup.jaccard_similarity(left, right, words=True) < 0.5
+
+
+def test_word_shingles_order_cjk_paraphrase_above_unrelated() -> None:
+    from hypoarena import dedup
+
+    claim = "基因G3导致细胞凋亡率上升"
+    paraphrase = "G3基因导致细胞的凋亡率上升"
+    unrelated = "代谢物M1抑制肿瘤细胞的生长速度"
+    close = dedup.jaccard_similarity(claim, paraphrase, n=2, words=True)
+    apart = dedup.jaccard_similarity(claim, unrelated, n=2, words=True)
+    assert close > apart
+    assert close > 0.25

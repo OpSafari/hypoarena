@@ -72,7 +72,7 @@ def normalize(
     return result
 
 
-WORD_PATTERN = re.compile(r"[a-z0-9]+")
+WORD_PATTERN = re.compile(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]")
 STOPWORDS = frozenset(
     {
         "a",
@@ -201,9 +201,11 @@ def tokenize(text: str) -> list[str]:
     """Split ``text`` into normalized alphanumeric tokens.
 
     Letters and digits stay joined, so ``"p53"`` is one token while ``"p-53"``
-    becomes two (punctuation is replaced by a space first). Characters that are
-    neither ASCII letters nor digits are dropped, which suits the English
-    synthetic corpora this toolkit generates.
+    becomes two (punctuation is replaced by a space first). CJK ideographs
+    (U+3400-U+4DBF and U+4E00-U+9FFF) are emitted as single-character tokens,
+    so :func:`word_ngrams` with ``n=2`` yields CJK bigrams — the standard
+    shingling for scripts without word separators. All other characters are
+    dropped.
     """
     return WORD_PATTERN.findall(normalize(text))
 

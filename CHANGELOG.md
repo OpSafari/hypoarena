@@ -2,6 +2,17 @@
 
 本项目遵循语义化版本；0.x 阶段的破坏性变更会在 minor 版本说明中显式列出。
 
+## 0.1.4
+
+- 新增 `hypoarena.reports`：把运行报告渲染为 Markdown 与自包含 HTML（内联样式、无外部引用），对不可信文本转义（Markdown 单元格无法被 `|` 或换行撑破，HTML 全量转义 `< > & " '`），并始终内嵌 limitations 段；`write_reports` 原子写出 `report.md` / `report.html`。
+- `hypoarena.artifacts` 扩展文本产物（`write_text` / `read_text`，原子写入），产物名允许 `.md` / `.html`。
+- 新增 `hypoarena.ranker`（NumPy 层）与 `hypoarena.ranker_torch`（可选 torch extra）：合成质量数据集、TF-IDF 特征、校准曲线与 Spearman 秩相关；种子化训练的小 MLP，损失真实下降且逐 epoch 可复现。它只学习合成质量信号、不判断科学真伪；相关测试标记 `model` / `slow`，缺 torch 时干净跳过。
+- `hypoarena.cli` 扩展为十个子命令（corpus/generate/verify/dedup/debate/rank/evolve/accumulate/report/demo）与 `--resume`，错误按类别映射到稳定退出码；`demo` 端到端离线运行并打印"恢复 vs 植入"。
+- 新增三个完全离线可运行示例（植入语料与 grounding 校验、Elo 排名恢复、演化 + 去重新颖度），各带 README 与真实运行输出；`tests/test_examples.py` 逐个运行并断言诚实声明。
+- 文档：新增 runner、reports、ranker、cli、examples、testing 与文档索引页；更新架构模块表与使用指南。
+- 测试：golden / 穷举扫描（枚举、错误码注册表、模块公开 API、run_report 结构、产物集合、序列化摘要、常量钉死）与性质 / 边界强化（reports 退化与随机载荷、ranker 指标与训练变体、Elo 收敛与最大噪声容忍、CLI 集成与子命令扫描、流水线不变量、bundle 序列化确定性）。
+- 修复：debate `revise_prompt_for` 按文档约定返回陈述；tournament `Judge.name` 改为只读协议成员（接受 frozen judge）；evolve 变量替换改为显式分支；agents 回放按键查找与序列项分离；`mypy` 全量通过。
+
 ## 0.1.3
 
 - 新增 `hypoarena.debate`：角色化辩论循环（propose → critique → revise）、`DebateConfig`、`DebateResult`/`DebateTurn` 转录、确定性上下文提取与 `apply_debate`。

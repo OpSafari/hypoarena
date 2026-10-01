@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hypoarena"
-version = "0.1.3"
+version = "0.1.4"
 description = "Offline workbench for hypothesis-discovery pipelines: grounded claim graphs, synthetic literature, debate loops, Elo tournaments and evidence accumulation."
 readme = "README.md"
 license = "MIT"

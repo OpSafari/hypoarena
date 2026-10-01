@@ -16,7 +16,7 @@ from hypoarena.runner import Pipeline
 from hypoarena.synthetic import SyntheticConfig
 
 DIGESTS = {
-    "tournament.jsonl": "c4a23ce0e68c5f86",
+    "tournament.jsonl": "18306870bba6b771",
     "debates.jsonl": "57668455b17cc5ac",
     "cost.json": "62f935ffda68ac5e",
 }

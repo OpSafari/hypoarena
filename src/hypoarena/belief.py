@@ -63,7 +63,7 @@ def from_odds(odds: float) -> float:
     """Convert odds back to a probability."""
     if odds < 0:
         raise ValidationError("odds must be >= 0", odds=odds)
-    return odds / (1.0 + odds)
+    return round(odds / (1.0 + odds), 6)
 
 
 def clamp_probability(probability: float) -> float:

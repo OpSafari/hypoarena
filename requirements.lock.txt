@@ -10,7 +10,7 @@
 # not pinned here. torch is the CPU-only build; no GPU wheels are used.
 ast-serialize==0.11.2
 build==1.6.1
-filelock==3.32.3
+filelock==4.0.5
 fsspec==2026.7.0
 hatchling==1.32.4
 iniconfig==2.3.0

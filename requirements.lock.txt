@@ -31,7 +31,7 @@ pytest==9.1.1
 ruff==0.16.9
 setuptools==78.1.0
 sympy==1.14.0
-tomlkit==0.15.1
+tomlkit==0.15.2
 torch==2.14.0+cpu
 trove-classifiers==2026.9.21.13
 typing-extensions==4.16.0
